@@ -1,0 +1,1 @@
+prepend-non-duplicate;GST_PLUGIN_PATH;lib/@PROJECT_NAME@/

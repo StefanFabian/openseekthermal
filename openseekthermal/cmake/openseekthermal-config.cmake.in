@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+if(NOT TARGET openseekthermal::openseekthermal)
+    message(STATUS "Including openseekthermal targets from ${CMAKE_CURRENT_LIST_DIR}/openseekthermal-targets.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/openseekthermal-targets.cmake")
+endif()
+check_required_components(openseekthermal)
