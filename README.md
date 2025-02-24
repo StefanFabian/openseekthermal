@@ -38,6 +38,7 @@ Relevant options:
 
 * openseekthermal
 * GStreamer
+  * (Ubuntu) ``libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev``
 
 ## Installation
 
