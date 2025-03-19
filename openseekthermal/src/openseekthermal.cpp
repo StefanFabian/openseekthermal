@@ -96,7 +96,11 @@ SeekDevice getSeekDevice( libusb_device *device )
 std::vector<SeekDevice> listDevices( SeekDevice::Type types )
 {
   libusb_context *context = nullptr;
+#if LIBUSB_API_VERSION >= 0x0100010A
   int returncode = libusb_init_context( &context, nullptr, 0 );
+#else
+  int returncode = libusb_init( &context );
+#endif
   if ( returncode < 0 ) {
     throw USBError( "Failed to initialize libusb!", returncode );
   }

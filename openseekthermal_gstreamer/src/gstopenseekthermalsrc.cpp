@@ -32,7 +32,7 @@
 #include <gst/video/gstvideometa.h>
 #include <gst/video/gstvideopool.h>
 #include <numeric>
-#include <string.h>
+#include <string>
 
 GST_DEBUG_CATEGORY_STATIC( openseekthermalsrc_debug );
 #define GST_CAT_DEFAULT openseekthermalsrc_debug
@@ -57,6 +57,7 @@ enum {
 static GstStaticPadTemplate gst_openseekthermalsrc_src_template = GST_STATIC_PAD_TEMPLATE(
     "src", GST_PAD_SRC, GST_PAD_ALWAYS, GST_STATIC_CAPS( OPENSEEKTHERMALSRC_CAPS ) );
 
+// cppcheck-suppress unknownMacro
 G_DEFINE_TYPE_WITH_CODE( GstOpenSeekThermalSrc, gst_openseekthermalsrc, GST_TYPE_PUSH_SRC,
                          GST_DEBUG_CATEGORY_INIT( openseekthermalsrc_debug, "openseekthermalsrc",
                                                   0, "Debug category for openseekthermalsrc element" ) )
@@ -193,11 +194,11 @@ static void gst_openseekthermalsrc_finalize( GstOpenSeekThermalSrc *ostsrc )
   ostsrc->serial = nullptr;
   g_free( ostsrc->port );
   ostsrc->port = nullptr;
-  g_free_sized( ostsrc->min_values, ostsrc->count_values * sizeof( guint ) );
+  g_free( ostsrc->min_values );
   ostsrc->min_values = nullptr;
-  g_free_sized( ostsrc->max_values, ostsrc->count_values * sizeof( guint ) );
+  g_free( ostsrc->max_values );
   ostsrc->max_values = nullptr;
-  g_free_sized( ostsrc->sort_value_buffer, ostsrc->count_values * sizeof( guint ) );
+  g_free( ostsrc->sort_value_buffer );
   ostsrc->sort_value_buffer = nullptr;
 
   G_OBJECT_CLASS( gst_openseekthermalsrc_parent_class )->finalize( (GObject *)( ostsrc ) );
