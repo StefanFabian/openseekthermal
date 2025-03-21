@@ -227,12 +227,6 @@ GrabFrameResult SeekThermalCamera::_grabRawFrame( unsigned char **frame_data, si
     buffer += transferred;
     done += transferred;
     todo -= transferred;
-    if ( todo != 0 && request_size != transferred ) {
-      LOG_ERROR( "Frame transfer stopped prematurely! Received only "
-                 << done << " out of " << device_._getFrameTransferTotalSize() << " bytes." );
-      result = GrabFrameResult::TRANSFER_INCOMPLETE;
-      break;
-    }
   }
   return result;
 }
