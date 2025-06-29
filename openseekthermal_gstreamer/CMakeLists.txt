@@ -23,10 +23,9 @@ target_include_directories(openseekthermal_gstreamer PRIVATE
 target_link_libraries(openseekthermal_gstreamer PUBLIC openseekthermal::openseekthermal ${GST_LIBRARIES})
 target_include_directories(openseekthermal_gstreamer PRIVATE ${GST_INCLUDE_DIRS})
 
-include(GNUInstallDirs)
 install(TARGETS openseekthermal_gstreamer
   EXPORT openseekthermal_gstreamer-targets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/openseekthermal_gstreamer
+  LIBRARY DESTINATION lib/openseekthermal_gstreamer
 )
 
 if(BUILD_TESTING)

@@ -51,25 +51,24 @@ if (BUILD_EXAMPLES)
 endif ()
 
 include(CMakePackageConfigHelpers)
-include(GNUInstallDirs)
 
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY include/ DESTINATION include)
 install(
   TARGETS openseekthermal
   EXPORT openseekthermal-targets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  LIBRARY DESTINATION lib
+  INCLUDES DESTINATION include
 )
 install(
   EXPORT openseekthermal-targets
   FILE openseekthermal-targets.cmake
   NAMESPACE openseekthermal::
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openseekthermal
+  DESTINATION lib/cmake/openseekthermal
 )
 
 configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/openseekthermal-config.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/openseekthermal-config.cmake"
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openseekthermal
+  INSTALL_DESTINATION lib/cmake/openseekthermal
 )
 
 # Generate the version file for the config file
@@ -83,6 +82,6 @@ write_basic_package_version_file(
 install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/openseekthermal-config.cmake"
   "${CMAKE_CURRENT_BINARY_DIR}/openseekthermal-config-version.cmake"
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openseekthermal
+  DESTINATION lib/cmake/openseekthermal
 )
 
