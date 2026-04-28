@@ -2,6 +2,8 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 #include "openseekthermal/detail/usb/seek_device.hpp"
 #include "openseekthermal/detail/exceptions.hpp"
+#include "openseekthermal/detail/frame.hpp"
+#include <cstring>
 #include <iomanip>
 
 std::ostream &operator<<( std::ostream &os, const openseekthermal::SeekDevice &device )
@@ -173,11 +175,13 @@ bool SeekDevice::_isCalibrationFrame( const std::vector<unsigned char> &buffer )
   case Type::SeekThermalCompact:
   case Type::SeekThermalCompactPro:
   case Type::SeekThermalNano300: {
-    if ( buffer.size() < 5 ) {
+    const int offset = FrameHeader::GetFrameTypeOffset( type );
+    if ( buffer.size() < static_cast<size_t>( offset ) + sizeof( uint16_t ) ) {
       return false;
     }
-    auto *data = reinterpret_cast<const uint16_t *>( buffer.data() );
-    return le16toh( data[2] ) == 1;
+    uint16_t raw_type;
+    std::memcpy( &raw_type, buffer.data() + offset, sizeof( uint16_t ) );
+    return le16toh( raw_type ) == 1;
   }
   default:
     break;
