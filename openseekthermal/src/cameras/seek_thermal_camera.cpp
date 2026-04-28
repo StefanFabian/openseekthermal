@@ -333,7 +333,10 @@ void SeekThermalCamera::applyCalibration( unsigned char *frame_data )
 {
   auto *data = reinterpret_cast<uint16_t *>( frame_data );
   for ( size_t i = 0; i < calibration_frame_.size(); ++i ) {
-    data[i] = htole16( le16toh( data[i] ) + offset_ - le16toh( calibration_frame_[i] ) );
+    const int32_t corrected = static_cast<int32_t>( le16toh( data[i] ) ) +
+                              static_cast<int32_t>( offset_ ) -
+                              static_cast<int32_t>( le16toh( calibration_frame_[i] ) );
+    data[i] = htole16( static_cast<uint16_t>( std::clamp( corrected, 0, 0xFFFF ) ) );
   }
 }
 
