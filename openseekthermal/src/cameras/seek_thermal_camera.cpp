@@ -5,6 +5,7 @@
 #include "openseekthermal/detail/exceptions.hpp"
 #include <libusb-1.0/libusb.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "../helpers.hpp"
@@ -304,16 +305,24 @@ void SeekThermalCamera::extractFrame( const unsigned char *__restrict__ data,
   const int row_step = device_._getRowStep() / 2;
   auto *data_in = reinterpret_cast<const uint16_t *>( data );
   auto *data_out = reinterpret_cast<uint16_t *>( frame_data );
-  // Apply a gaussian filter using only the set pixels
-  int filter_weights[9] = { 1, 2, 1, 2, 4, 2, 1, 2, 1 };
+  // Pass good pixels through unchanged; fall back to a 3x3 gaussian over the
+  // valid neighbours only when the center pixel itself is dead/saturated.
+  const int filter_weights[9] = { 1, 2, 1, 2, 4, 2, 1, 2, 1 };
   for ( int y = 0; y < height; ++y ) {
     for ( int x = 0; x < width; ++x ) {
       const int out_index = y * width + x;
+      const uint16_t center_raw = data_in[y * row_step + x];
+      const uint16_t center_value = le16toh( center_raw );
+      if ( center_value != 0 && center_value != 0xffff ) {
+        data_out[out_index] = center_raw;
+        continue;
+      }
       int sum = 0;
       int count = 0;
       for ( int k = -1; k <= 1; ++k ) {
         for ( int m = -1; m <= 1; ++m ) {
-          if ( y + k < 0 || y + k >= height || x + m < 0 || x + m >= width ) {
+          if ( ( k == 0 && m == 0 ) || y + k < 0 || y + k >= height || x + m < 0 ||
+               x + m >= width ) {
             continue;
           }
           const int index = ( y + k ) * row_step + x + m;
@@ -324,7 +333,7 @@ void SeekThermalCamera::extractFrame( const unsigned char *__restrict__ data,
           count += filter_weights[( k + 1 ) * 3 + m + 1];
         }
       }
-      data_out[out_index] = sum == 0 ? 0 : htole16( sum / count );
+      data_out[out_index] = count == 0 ? 0 : htole16( sum / count );
     }
   }
 }
