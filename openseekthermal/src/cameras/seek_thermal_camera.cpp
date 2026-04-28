@@ -124,7 +124,14 @@ void SeekThermalCamera::close()
 {
   if ( usb_device_handle_ == nullptr )
     return;
-  for ( int i = 0; i < 3; ++i ) { write( SeekDeviceCommand::SET_OPERATION_MODE, { 0x00, 0x00 } ); }
+  // Best-effort: if the device is already in a bad state (e.g. close() is
+  // called from open()'s catch block after a failed setup) the writes can
+  // throw USBError. Swallow it so we still release/close the libusb handle.
+  try {
+    for ( int i = 0; i < 3; ++i ) { write( SeekDeviceCommand::SET_OPERATION_MODE, { 0x00, 0x00 } ); }
+  } catch ( const USBError &e ) {
+    LOG_WARN( "USB error during close cleanup writes (ignored): " << e.what() );
+  }
   libusb_release_interface( usb_device_handle_, 0 );
   libusb_close( usb_device_handle_ );
   usb_device_handle_ = nullptr;

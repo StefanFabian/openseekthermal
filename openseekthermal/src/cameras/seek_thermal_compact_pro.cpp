@@ -39,7 +39,7 @@ void SeekThermalCompactPro::setupCamera()
     if ( !read( SeekDeviceCommand::GET_OPERATION_MODE, data ) )
       throw SeekSetupError( "Failed to read operation mode!" );
 
-  } while ( data[0] != 0x00 && data[1] != 0x00 );
+  } while ( data[0] != 0x00 || data[1] != 0x00 );
 
   if ( !write( SeekDeviceCommand::SET_FACTORY_SETTINGS_FEATURES,
                { 0x06, 0x00, 0x08, 0x00, 0x00, 0x00 } ) )
@@ -91,6 +91,6 @@ void SeekThermalCompactPro::setupCamera()
     }
     if ( data.resize( 2 ); !read( SeekDeviceCommand::GET_OPERATION_MODE, data ) )
       throw SeekSetupError( "Failed to read operation mode!" );
-  } while ( data[0] != 0x01 && data[1] != 0x00 );
+  } while ( data[0] != 0x01 || data[1] != 0x00 );
 }
 } // namespace openseekthermal

@@ -39,7 +39,7 @@ void SeekThermalNano300::setupCamera()
     if ( !read( SeekDeviceCommand::GET_OPERATION_MODE, data ) )
       throw SeekSetupError( "Failed to read chip ID!" );
 
-  } while ( data[0] != 0x00 && data[1] != 0x00 );
+  } while ( data[0] != 0x00 || data[1] != 0x00 );
 
   if ( !write( SeekDeviceCommand::SET_IMAGE_PROCESSING_MODE, { 0x08, 0x00 } ) )
     throw SeekSetupError( "Failed to set image processing mode!" );
@@ -106,6 +106,6 @@ void SeekThermalNano300::setupCamera()
     }
     if ( data.resize( 2 ); !read( SeekDeviceCommand::GET_OPERATION_MODE, data ) )
       throw SeekSetupError( "Failed to read operation mode!" );
-  } while ( data[0] != 0x01 && data[1] != 0x00 );
+  } while ( data[0] != 0x01 || data[1] != 0x00 );
 }
 } // namespace openseekthermal

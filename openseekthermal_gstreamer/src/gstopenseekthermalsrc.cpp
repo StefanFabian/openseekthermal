@@ -507,7 +507,9 @@ static gboolean gst_openseekthermalsrc_open( GstOpenSeekThermalSrc *src )
     src->camera = openseekthermal::createCamera( device );
     src->camera->open();
     src->first_frame = TRUE;
+    g_free( src->serial );
     src->serial = g_strdup( device.serial.c_str() );
+    g_free( src->port );
     src->port = g_strdup( device.usb_port.c_str() );
     GST_INFO_OBJECT( src, "Opened camera with serial '%s' and port '%s'.", src->serial, src->port );
   } catch ( const std::exception &e ) {
