@@ -3,6 +3,7 @@ project(openseekthermal)
 set(CMAKE_CXX_STANDARD 17)
 
 option(BUILD_EXAMPLES "Build examples" ON)
+option(BUILD_TOOLS "Build tools" ON)
 option(DISABLE_LOGGING "Disable all logging" OFF)
 option(ENABLE_DEBUG_LOGGING "Enable debug output" OFF)
 
@@ -21,6 +22,8 @@ add_library(openseekthermal SHARED
   src/cameras/seek_thermal_compact_pro.cpp
   src/cameras/seek_thermal_nano_300.cpp
   src/usb/seek_device.cpp
+  src/dead_pixel_mask.cpp
+  src/vignette_correction.cpp
   src/exceptions.cpp
   src/frame.cpp
   src/openseekthermal.cpp
@@ -48,6 +51,14 @@ if (BUILD_EXAMPLES)
 
   add_executable(stream_seek_camera examples/stream_seek_camera.cpp)
   target_link_libraries(stream_seek_camera openseekthermal)
+endif ()
+
+if (BUILD_TOOLS)
+  add_executable(calibrate_vignette tools/calibrate_vignette.cpp)
+  target_link_libraries(calibrate_vignette openseekthermal)
+
+  add_executable(calibrate_dead_pixels tools/calibrate_dead_pixels.cpp)
+  target_link_libraries(calibrate_dead_pixels openseekthermal)
 endif ()
 
 include(CMakePackageConfigHelpers)

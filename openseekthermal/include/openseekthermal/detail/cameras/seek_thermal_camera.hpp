@@ -4,11 +4,14 @@
 #ifndef OPENSEEKTHERMAL_SEEK_THERMAL_CAMERA_HPP
 #define OPENSEEKTHERMAL_SEEK_THERMAL_CAMERA_HPP
 
+#include "../../dead_pixel_mask.hpp"
+#include "../../vignette_correction.hpp"
 #include "../frame.hpp"
 #include "../usb/seek_device.hpp"
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 struct libusb_context;
@@ -75,6 +78,30 @@ public:
 
   std::string readChipID();
 
+  /*!
+   * Install a sparse dead-pixel mask (typically loaded via
+   * loadDeadPixelMaskPgm). Replaces any previously installed mask. Affected
+   * pixels are inpainted from their neighbours after the shutter calibration
+   * is applied to each frame.
+   * @throws std::invalid_argument if the mask dimensions do not match the
+   *         camera's frame dimensions.
+   */
+  void setDeadPixelMask( DeadPixelMask mask );
+
+  //! Remove any previously installed dead-pixel mask.
+  void clearDeadPixelMask();
+
+  /*!
+   * Install a radial polynomial vignette correction (loaded via
+   * loadVignetteCorrection). Replaces any previously installed correction.
+   * Applied after the shutter calibration on each frame.
+   * @throws std::invalid_argument if dimensions do not match the camera.
+   */
+  void setVignetteCorrection( VignetteCorrection vignette );
+
+  //! Remove any previously installed vignette correction.
+  void clearVignetteCorrection();
+
 protected:
   bool write( SeekDeviceCommand command, const std::vector<unsigned char> &data );
 
@@ -93,6 +120,8 @@ private:
   std::mutex buffer_mutex_;
   std::vector<unsigned char> buffer_;
   std::vector<uint16_t> calibration_frame_;
+  std::optional<DeadPixelMask> dead_pixel_mask_;
+  std::optional<VignetteCorrection> vignette_;
   libusb_context *usb_context_ = nullptr;
   libusb_device_handle *usb_device_handle_ = nullptr;
   uint16_t offset_ = 0x4000;

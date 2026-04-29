@@ -26,6 +26,8 @@
 
 #include "openseekthermal_gstreamer/gstopenseekthermalsrc.h"
 
+#include <openseekthermal/dead_pixel_mask.hpp>
+#include <openseekthermal/vignette_correction.hpp>
 #include <openseekthermal/detail/exceptions.hpp>
 
 #include <algorithm>
@@ -44,6 +46,8 @@ enum {
   PROP_SKIP_INVALID_FRAMES,
   PROP_NORMALIZE,
   PROP_NORMALIZE_FRAME_COUNT,
+  PROP_DEAD_PIXEL_MASK,
+  PROP_VIGNETTE_CORRECTION,
   PROP_LAST
 };
 
@@ -129,6 +133,23 @@ static void gst_openseekthermalsrc_class_init( GstOpenSeekThermalSrcClass *klass
                          "Number of frames to use for normalization.", 1, 25 * 60 * 60, 8,
                          (GParamFlags)( G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS ) ) );
 
+  g_object_class_install_property(
+      gobject_class, PROP_DEAD_PIXEL_MASK,
+      g_param_spec_string(
+          "dead-pixel-mask", "Dead Pixel Mask",
+          "Path to an 8-bit P5 PGM mask of dead pixels (255 = dead, 0 = good), as produced "
+          "by the calibrate_dead_pixels example. Flagged pixels are inpainted from their "
+          "neighbours after shutter calibration. Empty string disables.",
+          "", (GParamFlags)( G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS ) ) );
+  g_object_class_install_property(
+      gobject_class, PROP_VIGNETTE_CORRECTION,
+      g_param_spec_string(
+          "vignette-correction", "Vignette Correction",
+          "Path to a radial polynomial vignette fit, as produced by the calibrate_vignette "
+          "example. Subtracts the modelled lens-shading vignette while preserving overall "
+          "scene intensity. Empty string disables.",
+          "", (GParamFlags)( G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS ) ) );
+
   element_class->change_state = gst_openseekthermalsrc_change_state;
 
   gst_element_class_set_static_metadata( element_class, "OpenSeekThermal Video Source",
@@ -173,6 +194,8 @@ static void gst_openseekthermalsrc_init( GstOpenSeekThermalSrc *ostsrc )
 
   ostsrc->serial = g_strdup( "" );
   ostsrc->port = g_strdup( "" );
+  ostsrc->dead_pixel_mask_path = g_strdup( "" );
+  ostsrc->vignette_correction_path = g_strdup( "" );
   ostsrc->camera = nullptr;
 
   ostsrc->min_values = nullptr;
@@ -194,6 +217,10 @@ static void gst_openseekthermalsrc_finalize( GstOpenSeekThermalSrc *ostsrc )
   ostsrc->serial = nullptr;
   g_free( ostsrc->port );
   ostsrc->port = nullptr;
+  g_free( ostsrc->dead_pixel_mask_path );
+  ostsrc->dead_pixel_mask_path = nullptr;
+  g_free( ostsrc->vignette_correction_path );
+  ostsrc->vignette_correction_path = nullptr;
   g_free( ostsrc->min_values );
   ostsrc->min_values = nullptr;
   g_free( ostsrc->max_values );
@@ -242,6 +269,17 @@ static void gst_openseekthermalsrc_set_property( GObject *object, guint prop_id,
     resize_value_buffers( ostsrc, ostsrc->normalize_frame_count );
     ostsrc->index = 0;
     break;
+  case PROP_DEAD_PIXEL_MASK:
+    g_free( ostsrc->dead_pixel_mask_path );
+    ostsrc->dead_pixel_mask_path = g_value_dup_string( value );
+    GST_DEBUG_OBJECT( ostsrc, "Dead pixel mask path set to %s", ostsrc->dead_pixel_mask_path );
+    break;
+  case PROP_VIGNETTE_CORRECTION:
+    g_free( ostsrc->vignette_correction_path );
+    ostsrc->vignette_correction_path = g_value_dup_string( value );
+    GST_DEBUG_OBJECT( ostsrc, "Vignette correction path set to %s",
+                      ostsrc->vignette_correction_path );
+    break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID( object, prop_id, pspec );
     break;
@@ -268,6 +306,12 @@ static void gst_openseekthermalsrc_get_property( GObject *object, guint prop_id,
     break;
   case PROP_NORMALIZE_FRAME_COUNT:
     g_value_set_uint( value, ostsrc->normalize_frame_count );
+    break;
+  case PROP_DEAD_PIXEL_MASK:
+    g_value_set_string( value, ostsrc->dead_pixel_mask_path );
+    break;
+  case PROP_VIGNETTE_CORRECTION:
+    g_value_set_string( value, ostsrc->vignette_correction_path );
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID( object, prop_id, pspec );
@@ -515,6 +559,44 @@ static gboolean gst_openseekthermalsrc_open( GstOpenSeekThermalSrc *src )
   } catch ( const std::exception &e ) {
     GST_ERROR_OBJECT( src, "Failed to open camera: %s", e.what() );
     return FALSE;
+  }
+
+  if ( src->dead_pixel_mask_path != nullptr && strlen( src->dead_pixel_mask_path ) > 0 ) {
+    try {
+      auto mask = openseekthermal::loadDeadPixelMaskPgm( src->dead_pixel_mask_path,
+                                                        src->camera->getFrameWidth(),
+                                                        src->camera->getFrameHeight() );
+      GST_INFO_OBJECT( src, "Loaded dead pixel mask '%s' with %zu dead pixels.",
+                       src->dead_pixel_mask_path, mask.deadPixelCount() );
+      src->camera->setDeadPixelMask( std::move( mask ) );
+    } catch ( const std::exception &e ) {
+      GST_ERROR_OBJECT( src, "Failed to load dead pixel mask '%s': %s",
+                        src->dead_pixel_mask_path, e.what() );
+      try {
+        src->camera->close();
+      } catch ( ... ) {
+      }
+      return FALSE;
+    }
+  }
+
+  if ( src->vignette_correction_path != nullptr && strlen( src->vignette_correction_path ) > 0 ) {
+    try {
+      auto vignette = openseekthermal::loadVignetteCorrection( src->vignette_correction_path,
+                                                               src->camera->getFrameWidth(),
+                                                               src->camera->getFrameHeight() );
+      GST_INFO_OBJECT( src, "Loaded vignette correction '%s' (degree %d).",
+                       src->vignette_correction_path, vignette.degree );
+      src->camera->setVignetteCorrection( std::move( vignette ) );
+    } catch ( const std::exception &e ) {
+      GST_ERROR_OBJECT( src, "Failed to load vignette correction '%s': %s",
+                        src->vignette_correction_path, e.what() );
+      try {
+        src->camera->close();
+      } catch ( ... ) {
+      }
+      return FALSE;
+    }
   }
   return TRUE;
 }

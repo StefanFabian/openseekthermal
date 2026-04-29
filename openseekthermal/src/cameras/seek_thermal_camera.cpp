@@ -6,6 +6,7 @@
 #include <libusb-1.0/libusb.h>
 
 #include <algorithm>
+#include <stdexcept>
 #include <utility>
 
 #include "../helpers.hpp"
@@ -293,6 +294,12 @@ GrabFrameResult SeekThermalCamera::grabFrame( unsigned char **image_data, size_t
   if ( image_data != nullptr ) {
     extractFrame( buffer_.data() + header_size, *image_data );
     applyCalibration( *image_data );
+    if ( dead_pixel_mask_ ) {
+      dead_pixel_mask_->apply( reinterpret_cast<uint16_t *>( *image_data ) );
+    }
+    if ( vignette_ ) {
+      vignette_->apply( reinterpret_cast<uint16_t *>( *image_data ) );
+    }
   }
   return GrabFrameResult::SUCCESS;
 }
@@ -347,6 +354,36 @@ void SeekThermalCamera::applyCalibration( unsigned char *frame_data )
                               static_cast<int32_t>( le16toh( calibration_frame_[i] ) );
     data[i] = htole16( static_cast<uint16_t>( std::clamp( corrected, 0, 0xFFFF ) ) );
   }
+}
+
+void SeekThermalCamera::setDeadPixelMask( DeadPixelMask mask )
+{
+  if ( mask.width() != getFrameWidth() || mask.height() != getFrameHeight() ) {
+    throw std::invalid_argument( "Dead-pixel mask dimensions do not match camera frame" );
+  }
+  std::lock_guard buffer_lock( buffer_mutex_ );
+  dead_pixel_mask_ = std::move( mask );
+}
+
+void SeekThermalCamera::clearDeadPixelMask()
+{
+  std::lock_guard buffer_lock( buffer_mutex_ );
+  dead_pixel_mask_.reset();
+}
+
+void SeekThermalCamera::setVignetteCorrection( VignetteCorrection vignette )
+{
+  if ( vignette.width != getFrameWidth() || vignette.height != getFrameHeight() ) {
+    throw std::invalid_argument( "Vignette correction dimensions do not match camera frame" );
+  }
+  std::lock_guard buffer_lock( buffer_mutex_ );
+  vignette_ = std::move( vignette );
+}
+
+void SeekThermalCamera::clearVignetteCorrection()
+{
+  std::lock_guard buffer_lock( buffer_mutex_ );
+  vignette_.reset();
 }
 
 std::string SeekThermalCamera::readChipID()
