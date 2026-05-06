@@ -105,8 +105,7 @@ VignetteCorrection loadVignetteCorrection( const std::filesystem::path &path, in
   auto require = [&]( const std::string &key ) -> const std::string & {
     auto it = kv.find( key );
     if ( it == kv.end() ) {
-      throw std::runtime_error( "Vignette file missing required key '" + key +
-                                "': " + path.string() );
+      throw std::runtime_error( "Vignette file missing required key '" + key + "': " + path.string() );
     }
     return it->second;
   };

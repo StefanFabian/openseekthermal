@@ -17,8 +17,8 @@ namespace openseekthermal
  * the per-frame inner loop is a flat weighted sum.
  */
 struct DeadPixelEntry {
-  uint32_t index = 0;       //!< y * width + x of the dead pixel
-  uint8_t neighbor_count = 0; //!< number of valid neighbours (0..8)
+  uint32_t index = 0;            //!< y * width + x of the dead pixel
+  uint8_t neighbor_count = 0;    //!< number of valid neighbours (0..8)
   uint32_t neighbors[8] = { 0 }; //!< flat indices of non-dead 3x3 neighbours
   uint8_t weights[8] = { 0 };    //!< matching gauss weights
 };
@@ -49,8 +49,11 @@ public:
   void apply( uint16_t *frame ) const;
 
   int width() const { return width_; }
+
   int height() const { return height_; }
+
   size_t deadPixelCount() const { return entries_.size(); }
+
   const std::vector<DeadPixelEntry> &entries() const { return entries_; }
 
 private:

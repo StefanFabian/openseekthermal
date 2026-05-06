@@ -130,7 +130,9 @@ void SeekThermalCamera::close()
   // called from open()'s catch block after a failed setup) the writes can
   // throw USBError. Swallow it so we still release/close the libusb handle.
   try {
-    for ( int i = 0; i < 3; ++i ) { write( SeekDeviceCommand::SET_OPERATION_MODE, { 0x00, 0x00 } ); }
+    for ( int i = 0; i < 3; ++i ) {
+      write( SeekDeviceCommand::SET_OPERATION_MODE, { 0x00, 0x00 } );
+    }
   } catch ( const USBError &e ) {
     LOG_WARN( "USB error during close cleanup writes (ignored): " << e.what() );
   }
@@ -328,8 +330,7 @@ void SeekThermalCamera::extractFrame( const unsigned char *__restrict__ data,
       int count = 0;
       for ( int k = -1; k <= 1; ++k ) {
         for ( int m = -1; m <= 1; ++m ) {
-          if ( ( k == 0 && m == 0 ) || y + k < 0 || y + k >= height || x + m < 0 ||
-               x + m >= width ) {
+          if ( ( k == 0 && m == 0 ) || y + k < 0 || y + k >= height || x + m < 0 || x + m >= width ) {
             continue;
           }
           const int index = ( y + k ) * row_step + x + m;

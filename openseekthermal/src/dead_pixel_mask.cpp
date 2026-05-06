@@ -23,7 +23,7 @@ void skipWhitespaceAndComments( std::istream &in )
   char c;
   while ( in.get( c ) ) {
     if ( c == '#' ) {
-      while ( in.get( c ) && c != '\n' ) {}
+      while ( in.get( c ) && c != '\n' ) { }
     } else if ( !std::isspace( static_cast<unsigned char>( c ) ) ) {
       in.unget();
       break;
@@ -120,8 +120,7 @@ DeadPixelMask loadDeadPixelMaskPgm( const std::filesystem::path &path, int expec
                               std::to_string( expected_height ) );
   }
   std::vector<uint8_t> bytes( static_cast<size_t>( w ) * h );
-  in.read( reinterpret_cast<char *>( bytes.data() ),
-           static_cast<std::streamsize>( bytes.size() ) );
+  in.read( reinterpret_cast<char *>( bytes.data() ), static_cast<std::streamsize>( bytes.size() ) );
   if ( !in ) {
     throw std::runtime_error( "Short read on dead-pixel mask: " + path.string() );
   }
