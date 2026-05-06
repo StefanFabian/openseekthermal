@@ -7,6 +7,10 @@ option(BUILD_TOOLS "Build tools" ON)
 option(DISABLE_LOGGING "Disable all logging" OFF)
 option(ENABLE_DEBUG_LOGGING "Enable debug output" OFF)
 
+# Optional ament integration: when building inside a colcon/ROS 2 workspace,
+# install tools to lib/${PROJECT_NAME} so `ros2 run` can discover them.
+find_package(ament_cmake QUIET)
+
 # find dependencies
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(libusb REQUIRED libusb-1.0)
@@ -46,19 +50,26 @@ if (BUILD_EXAMPLES)
   add_executable(grab_raw_frame examples/grab_raw_frame.cpp)
   target_link_libraries(grab_raw_frame openseekthermal)
 
-  add_executable(list_seek_devices examples/list_seek_devices.cpp)
-  target_link_libraries(list_seek_devices openseekthermal)
-
   add_executable(stream_seek_camera examples/stream_seek_camera.cpp)
   target_link_libraries(stream_seek_camera openseekthermal)
 endif ()
 
 if (BUILD_TOOLS)
-  add_executable(calibrate_vignette tools/calibrate_vignette.cpp)
+  add_executable(calibrate_vignette src/tools/calibrate_vignette.cpp)
   target_link_libraries(calibrate_vignette openseekthermal)
 
-  add_executable(calibrate_dead_pixels tools/calibrate_dead_pixels.cpp)
+  add_executable(calibrate_dead_pixels src/tools/calibrate_dead_pixels.cpp)
   target_link_libraries(calibrate_dead_pixels openseekthermal)
+
+  add_executable(list_seek_devices src/tools/list_seek_devices.cpp)
+  target_link_libraries(list_seek_devices openseekthermal)
+
+  if (ament_cmake_FOUND)
+    install(
+      TARGETS calibrate_vignette calibrate_dead_pixels list_seek_devices
+      RUNTIME DESTINATION lib/${PROJECT_NAME}
+    )
+  endif ()
 endif ()
 
 include(CMakePackageConfigHelpers)
@@ -95,4 +106,8 @@ install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/openseekthermal-config-version.cmake"
   DESTINATION lib/cmake/openseekthermal
 )
+
+if (ament_cmake_FOUND)
+  ament_package()
+endif ()
 

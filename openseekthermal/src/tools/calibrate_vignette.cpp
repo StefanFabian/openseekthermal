@@ -64,16 +64,15 @@ namespace
 
 void printUsage( const char *argv0 )
 {
-  std::cout
-      << "Usage: " << argv0 << " [options]\n"
-      << "  --out PATH         output file for fit coefficients (default vignette.ini)\n"
-      << "  --frames N         number of thermal frames to average (default 50)\n"
-      << "  --warmup K         frames to discard before capture (default 30)\n"
-      << "  --degree D         polynomial degree in r² (default 3, range 1..6)\n"
-      << "  --dead-pixels PATH  PGM mask from calibrate_dead_pixels; flagged pixels are\n"
-      << "                       excluded from the fit (255 = dead, 0 = good)\n"
-      << "  --write-diagnostics  also write average / model / residual PGMs next to --out\n"
-      << "  --serial S | --port P  device selector\n";
+  std::cout << "Usage: " << argv0 << " [options]\n"
+            << "  --out PATH         output file for fit coefficients (default vignette.ini)\n"
+            << "  --frames N         number of thermal frames to average (default 50)\n"
+            << "  --warmup K         frames to discard before capture (default 30)\n"
+            << "  --degree D         polynomial degree in r² (default 3, range 1..6)\n"
+            << "  --dead-pixels PATH  PGM mask from calibrate_dead_pixels; flagged pixels are\n"
+            << "                       excluded from the fit (255 = dead, 0 = good)\n"
+            << "  --write-diagnostics  also write average / model / residual PGMs next to --out\n"
+            << "  --serial S | --port P  device selector\n";
 }
 
 bool writePgm16BE( const fs::path &path, const std::vector<uint16_t> &data, int width, int height )
@@ -112,8 +111,7 @@ bool loadDeadMaskPgm( const fs::path &path, int expected_width, int expected_hei
     char c;
     while ( in.get( c ) ) {
       if ( c == '#' ) {
-        while ( in.get( c ) && c != '\n' ) {
-        }
+        while ( in.get( c ) && c != '\n' ) { }
       } else if ( !std::isspace( static_cast<unsigned char>( c ) ) ) {
         in.unget();
         break;
@@ -503,8 +501,8 @@ int main( int argc, char **argv )
   for ( size_t i = 0; i < pixel_count; ++i )
     avg[i] = static_cast<double>( sum[i] ) / static_cast<double>( frames );
 
-  RadialFit fit = fitRadialPolynomial( avg, width, height, degree,
-                                       dead_mask.empty() ? nullptr : &dead_mask );
+  RadialFit fit =
+      fitRadialPolynomial( avg, width, height, degree, dead_mask.empty() ? nullptr : &dead_mask );
   if ( fit.coeffs.empty() ) {
     std::cerr << "Fit failed (degenerate normal equations).\n";
     camera->close();
@@ -536,7 +534,8 @@ int main( int argc, char **argv )
       ++live_count;
     }
   }
-  const double rms = live_count > 0 ? std::sqrt( res_sum_sq / static_cast<double>( live_count ) ) : 0.0;
+  const double rms =
+      live_count > 0 ? std::sqrt( res_sum_sq / static_cast<double>( live_count ) ) : 0.0;
 
   std::cout << "Fit: c0=" << fit.coeffs[0];
   for ( int k = 1; k <= fit.degree; ++k ) std::cout << "  c" << k << "=" << fit.coeffs[k];

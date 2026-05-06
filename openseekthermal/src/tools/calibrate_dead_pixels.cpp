@@ -57,11 +57,10 @@
 //   * If the median stddev is very small the tool warns: that means the scene
 //     wasn't varied enough during capture and the STUCK pass is unreliable.
 
-#include "openseekthermal/vignette_correction.hpp"
 #include "openseekthermal/openseekthermal.hpp"
+#include "openseekthermal/vignette_correction.hpp"
 
 #include <algorithm>
-#include <optional>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -70,6 +69,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -271,8 +271,7 @@ int main( int argc, char **argv )
     try {
       vignette = loadVignetteCorrection( vignette_path, width, height );
     } catch ( const std::exception &e ) {
-      std::cerr << "Failed to load vignette '" << vignette_path.string() << "': " << e.what()
-                << "\n";
+      std::cerr << "Failed to load vignette '" << vignette_path.string() << "': " << e.what() << "\n";
       camera->close();
       return 1;
     }
@@ -411,7 +410,8 @@ int main( int argc, char **argv )
   // The STUCK pass only works if good pixels saw real scene variation. If the
   // median stddev is tiny the camera was effectively static — warn the caller.
   if ( stddev_median < 5.0 ) {
-    std::cout << "\nWarning: median temporal stddev is " << stddev_median << " counts — the\n"
+    std::cout << "\nWarning: median temporal stddev is " << stddev_median
+              << " counts — the\n"
                  "      scene barely changed during capture. Stuck-pixel detection is\n"
                  "      unreliable. Re-run while panning the camera across a varied scene.\n";
   }
@@ -438,11 +438,10 @@ int main( int argc, char **argv )
     const double stddev_scale = stddev_max > 0.0 ? 65535.0 / stddev_max : 0.0;
     for ( size_t i = 0; i < pixel_count; ++i ) {
       mean_pgm[i] = static_cast<uint16_t>( std::clamp( mean_buf[i], 0.0, 65535.0 ) );
-      stddev_pgm[i] = static_cast<uint16_t>(
-          std::clamp( stddev_buf[i] * stddev_scale, 0.0, 65535.0 ) );
+      stddev_pgm[i] =
+          static_cast<uint16_t>( std::clamp( stddev_buf[i] * stddev_scale, 0.0, 65535.0 ) );
       // Residual is centred at 32768 so positive and negative are both visible.
-      residual_pgm[i] =
-          static_cast<uint16_t>( std::clamp( residual[i] + 32768.0, 0.0, 65535.0 ) );
+      residual_pgm[i] = static_cast<uint16_t>( std::clamp( residual[i] + 32768.0, 0.0, 65535.0 ) );
     }
     writePgm16BE( stem.string() + "_mean.pgm", mean_pgm, width, height );
     writePgm16BE( stem.string() + "_stddev.pgm", stddev_pgm, width, height );
