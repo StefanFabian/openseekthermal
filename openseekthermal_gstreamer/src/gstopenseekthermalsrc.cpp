@@ -27,8 +27,8 @@
 #include "openseekthermal_gstreamer/gstopenseekthermalsrc.h"
 
 #include <openseekthermal/dead_pixel_mask.hpp>
-#include <openseekthermal/vignette_correction.hpp>
 #include <openseekthermal/detail/exceptions.hpp>
+#include <openseekthermal/vignette_correction.hpp>
 
 #include <algorithm>
 #include <gst/video/gstvideometa.h>
@@ -57,7 +57,7 @@ enum {
   "format = { Y16, GRAY16_LE }, "                                                                  \
   "width = " GST_VIDEO_SIZE_RANGE ", "                                                             \
   "height = " GST_VIDEO_SIZE_RANGE ", "                                                            \
-  "framerate = 0/1 "
+  "framerate = " GST_VIDEO_FPS_RANGE
 static GstStaticPadTemplate gst_openseekthermalsrc_src_template = GST_STATIC_PAD_TEMPLATE(
     "src", GST_PAD_SRC, GST_PAD_ALWAYS, GST_STATIC_CAPS( OPENSEEKTHERMALSRC_CAPS ) );
 
@@ -277,8 +277,7 @@ static void gst_openseekthermalsrc_set_property( GObject *object, guint prop_id,
   case PROP_VIGNETTE_CORRECTION:
     g_free( ostsrc->vignette_correction_path );
     ostsrc->vignette_correction_path = g_value_dup_string( value );
-    GST_DEBUG_OBJECT( ostsrc, "Vignette correction path set to %s",
-                      ostsrc->vignette_correction_path );
+    GST_DEBUG_OBJECT( ostsrc, "Vignette correction path set to %s", ostsrc->vignette_correction_path );
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID( object, prop_id, pspec );
@@ -330,9 +329,10 @@ static GstCaps *gst_openseekthermalsrc_get_caps( GstBaseSrc *src, GstCaps * )
 
   auto width = static_cast<gint>( ostsrc->camera->getFrameWidth() );
   auto height = static_cast<gint>( ostsrc->camera->getFrameHeight() );
+  auto rate = ostsrc->camera->getMaxFramerate();
   GstCaps *caps = gst_caps_new_simple( "video/x-raw", "format", G_TYPE_STRING, "GRAY16_LE", "width",
                                        G_TYPE_INT, width, "height", G_TYPE_INT, height, "framerate",
-                                       GST_TYPE_FRACTION, 0, 1, NULL );
+                                       GST_TYPE_FRACTION, rate.numerator, rate.denominator, NULL );
   gchar *caps_str = gst_caps_to_string( caps );
   GST_INFO_OBJECT( src, "Camera caps: %s", caps_str );
   g_free( caps_str );
@@ -514,6 +514,17 @@ static GstFlowReturn gst_openseekthermalsrc_create( GstPushSrc *src, GstBuffer *
     }
   }
   gst_buffer_unmap( *buf, &map );
+
+  // Tag the buffer with the camera's nominal frame period so downstream
+  // elements (e.g. videorate drop-only) that require a valid duration on
+  // every input buffer can compute next_ts. Calibration drops just look
+  // like missing frames at the same nominal rate.
+  auto max_rate = ostsrc->camera->getMaxFramerate();
+  if ( max_rate.numerator > 0 ) {
+    GST_BUFFER_DURATION( *buf ) =
+        gst_util_uint64_scale( GST_SECOND, static_cast<guint64>( max_rate.denominator ),
+                               static_cast<guint64>( max_rate.numerator ) );
+  }
   return GST_FLOW_OK;
 }
 
@@ -563,15 +574,14 @@ static gboolean gst_openseekthermalsrc_open( GstOpenSeekThermalSrc *src )
 
   if ( src->dead_pixel_mask_path != nullptr && strlen( src->dead_pixel_mask_path ) > 0 ) {
     try {
-      auto mask = openseekthermal::loadDeadPixelMaskPgm( src->dead_pixel_mask_path,
-                                                        src->camera->getFrameWidth(),
-                                                        src->camera->getFrameHeight() );
+      auto mask = openseekthermal::loadDeadPixelMaskPgm(
+          src->dead_pixel_mask_path, src->camera->getFrameWidth(), src->camera->getFrameHeight() );
       GST_INFO_OBJECT( src, "Loaded dead pixel mask '%s' with %zu dead pixels.",
                        src->dead_pixel_mask_path, mask.deadPixelCount() );
       src->camera->setDeadPixelMask( std::move( mask ) );
     } catch ( const std::exception &e ) {
-      GST_ERROR_OBJECT( src, "Failed to load dead pixel mask '%s': %s",
-                        src->dead_pixel_mask_path, e.what() );
+      GST_ERROR_OBJECT( src, "Failed to load dead pixel mask '%s': %s", src->dead_pixel_mask_path,
+                        e.what() );
       try {
         src->camera->close();
       } catch ( ... ) {
