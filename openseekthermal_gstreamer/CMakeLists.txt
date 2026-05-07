@@ -28,12 +28,6 @@ install(TARGETS openseekthermal_gstreamer
   LIBRARY DESTINATION lib/openseekthermal_gstreamer
 )
 
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  set(ament_cmake_copyright_FOUND TRUE)
-  ament_lint_auto_find_test_dependencies()
-endif()
-
 if (ament_cmake_FOUND)
   ament_environment_hooks(register_plugin.dsv.in)
   ament_package()
