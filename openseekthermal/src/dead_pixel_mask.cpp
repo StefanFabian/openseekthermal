@@ -83,6 +83,7 @@ void DeadPixelMask::apply( uint16_t *frame ) const
       sum += v * w;
       total_weight += w;
     }
+    // cppcheck-suppress zerodiv ; neighbor_count > 0 (checked above) and weights are > 0
     frame[entry.index] = htole16( static_cast<uint16_t>( sum / total_weight ) );
   }
 }
