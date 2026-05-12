@@ -59,6 +59,14 @@ the polynomial fit, which is why this step runs second. The vignette
 effect is small enough that letting dead pixels into the fit measurably
 biases the coefficients.
 
+The optical center is fit jointly with the polynomial coefficients
+(starts at the image center, refined by Gauss-Newton). The tool prints
+`offset-from-image-center=(dx, dy) px` after the fit - a few pixels of
+offset is normal for a typical lens; tens of pixels usually means the
+target was not uniform enough and you should recapture. Pass
+`--fix-center` to lock the center to the image center if the joint fit
+drifts on a poor target.
+
 Output: `vignette.ini` — radial polynomial fit (a handful of floats).
 
 ## 3. Apply at runtime

@@ -11,10 +11,14 @@
 // warmer than the centre — a radially symmetric (or near-symmetric) artifact.
 //
 // We model that artifact as a polynomial in r² (with r the distance from the
-// optical axis, defaulted to image centre):
+// optical axis, which is jointly fit alongside the coefficients):
 //
 //     vignette(x, y) = c[0] + c[1]·u + c[2]·u² + … + c[D]·u^D
-//     where u = r²(x, y) / r²_max  (normalised to [0, 1])
+//     where u = ((x - cx)² + (y - cy)²) / r²_max  (≈ [0, 1])
+//
+// r²_max is fixed at the image-center corner distance² so the coefficient
+// parametrization stays comparable across runs. The center (cx, cy) starts at
+// the image center and is refined by Gauss-Newton.
 //
 // Why a radial fit instead of a flat-field PGM:
 //   * Doesn't require a perfectly uniform target — non-radial scene variation
@@ -69,6 +73,9 @@ void printUsage( const char *argv0 )
             << "  --frames N         number of thermal frames to average (default 50)\n"
             << "  --warmup K         frames to discard before capture (default 30)\n"
             << "  --degree D         polynomial degree in r² (default 3, range 1..6)\n"
+            << "  --fix-center       lock the optical center to the image center instead of\n"
+            << "                       jointly fitting it (use if the joint fit drifts on a\n"
+            << "                       poor target)\n"
             << "  --dead-pixels PATH  PGM mask from calibrate_dead_pixels; flagged pixels are\n"
             << "                       excluded from the fit (255 = dead, 0 = good)\n"
             << "  --write-diagnostics  also write average / model / residual PGMs next to --out\n"
@@ -209,23 +216,29 @@ bool solveLinear( std::vector<double> &A, std::vector<double> &b, int N )
   return true;
 }
 
-// Fit a polynomial of `degree` in u = r² / r²_max to the averaged image.
-// Two passes: an initial least-squares fit (excluding any caller-supplied
-// dead pixels), then a robust re-fit additionally excluding pixels whose
-// residual exceeds 3·MAD (rejects non-radial scene structure that survived
-// averaging, hot/cold spots that the dead-pixel mask missed, etc.).
+// Jointly fit (cx, cy, c[0..D]) to the averaged image.
 //
-// `dead_mask` may be null. When provided, it must have width*height entries;
-// any `true` entry is excluded from both passes and from the MAD computation.
+// The model is nonlinear in (cx, cy) but linear in the coefficients, so we
+// alternate: hold (cx, cy) fixed and solve coeffs in closed form, then take a
+// Gauss-Newton step on (cx, cy) holding coeffs fixed. r²_max is kept fixed at
+// the image-center corner distance² — moving the center slightly shifts u
+// out of [0, 1] in places, which the coefficients absorb.
+//
+// After convergence we do one robust MAD-based refit of the coefficients,
+// rejecting pixels whose residual exceeds 3·MAD (non-radial scene structure
+// that survived averaging, hot/cold spots the dead-pixel mask missed, etc.).
+//
+// `dead_mask` may be null. When provided, any `true` entry is excluded from
+// every fit pass and from the MAD computation.
 RadialFit fitRadialPolynomial( const std::vector<double> &avg, int width, int height, int degree,
-                               const std::vector<bool> *dead_mask = nullptr )
+                               bool fit_center, const std::vector<bool> *dead_mask = nullptr )
 {
   RadialFit fit;
   fit.width = width;
   fit.height = height;
   fit.cx = ( width - 1 ) * 0.5;
   fit.cy = ( height - 1 ) * 0.5;
-  // Normalisation: r²_max is the corner distance² so u ∈ [0, 1].
+  // Fixed normalisation based on image-center corner distance².
   const double dx_corner = std::max( fit.cx, ( width - 1 ) - fit.cx );
   const double dy_corner = std::max( fit.cy, ( height - 1 ) - fit.cy );
   fit.r2_max = dx_corner * dx_corner + dy_corner * dy_corner;
@@ -233,27 +246,32 @@ RadialFit fitRadialPolynomial( const std::vector<double> &avg, int width, int he
   fit.coeffs.assign( degree + 1, 0.0 );
 
   const int N = degree + 1;
-  std::vector<double> A( N * N, 0.0 );
-  std::vector<double> b( N, 0.0 );
+  const size_t P = static_cast<size_t>( width ) * height;
 
-  // Pre-cache normalised r² per pixel.
-  std::vector<double> u( static_cast<size_t>( width ) * height, 0.0 );
-  for ( int y = 0; y < height; ++y ) {
-    for ( int x = 0; x < width; ++x ) {
-      const double dx = x - fit.cx;
-      const double dy = y - fit.cy;
-      u[y * width + x] = ( dx * dx + dy * dy ) / fit.r2_max;
-    }
+  std::vector<bool> live( P, true );
+  if ( dead_mask ) {
+    for ( size_t i = 0; i < P; ++i ) live[i] = !( *dead_mask )[i];
   }
 
-  auto accumulate = [&]( const std::vector<bool> *include ) {
-    std::fill( A.begin(), A.end(), 0.0 );
-    std::fill( b.begin(), b.end(), 0.0 );
-    for ( size_t i = 0; i < u.size(); ++i ) {
-      if ( include && !( *include )[i] )
+  std::vector<double> u( P, 0.0 );
+  auto computeU = [&]() {
+    for ( int y = 0; y < height; ++y ) {
+      for ( int x = 0; x < width; ++x ) {
+        const double dx = x - fit.cx;
+        const double dy = y - fit.cy;
+        u[y * width + x] = ( dx * dx + dy * dy ) / fit.r2_max;
+      }
+    }
+  };
+
+  auto solveCoeffs = [&]( const std::vector<bool> &include ) -> bool {
+    std::vector<double> A( N * N, 0.0 );
+    std::vector<double> b( N, 0.0 );
+    std::vector<double> basis( N );
+    for ( size_t i = 0; i < P; ++i ) {
+      if ( !include[i] )
         continue;
       double up_i = 1.0;
-      std::vector<double> basis( N );
       for ( int k = 0; k < N; ++k ) {
         basis[k] = up_i;
         up_i *= u[i];
@@ -264,26 +282,81 @@ RadialFit fitRadialPolynomial( const std::vector<double> &avg, int width, int he
         for ( int c = 0; c < N; ++c ) A[r * N + c] += basis[r] * basis[c];
       }
     }
+    if ( !solveLinear( A, b, N ) )
+      return false;
+    fit.coeffs = b;
+    return true;
   };
 
-  // Pass 1: all live pixels (dead-mask exclusions only).
-  std::vector<bool> include1( u.size(), true );
-  if ( dead_mask ) {
-    for ( size_t i = 0; i < u.size(); ++i ) include1[i] = !( *dead_mask )[i];
-  }
-  accumulate( &include1 );
-  std::vector<double> coeffs1 = b;
-  std::vector<double> A1 = A;
-  if ( !solveLinear( A1, coeffs1, N ) )
-    return fit; // degenerate; coefficients stay zero
-  fit.coeffs = coeffs1;
+  computeU();
+  if ( !solveCoeffs( live ) )
+    return fit; // degenerate
 
-  // Compute residuals on live pixels for MAD-based robust rejection in pass 2.
-  // Dead pixels are skipped entirely so they don't bias the MAD estimate.
-  std::vector<double> residuals( u.size(), 0.0 );
+  // Joint refinement of (cx, cy) by Gauss-Newton, alternating with a coeff
+  // resolve at each step. Converges in well under 30 iterations for any
+  // physically realistic vignette. Skipped when the caller locks the center.
+  constexpr int kMaxCenterIters = 30;
+  constexpr double kCenterTolPx = 0.01;
+  for ( int iter = 0; fit_center && iter < kMaxCenterIters; ++iter ) {
+    // Build 2×2 normal equations for the (cx, cy) update.
+    // ∂model/∂cx = (-2 (x - cx) / r²_max) · D(u)
+    // where D(u) = Σ_{k≥1} c_k · k · u^(k-1).
+    double JJxx = 0.0, JJxy = 0.0, JJyy = 0.0;
+    double Jrx = 0.0, Jry = 0.0;
+    for ( int y = 0; y < height; ++y ) {
+      for ( int x = 0; x < width; ++x ) {
+        const size_t i = static_cast<size_t>( y ) * width + x;
+        if ( !live[i] )
+          continue;
+        const double ui = u[i];
+        double Du = 0.0;
+        double upow = 1.0; // u^(k-1) starting at k=1
+        double model = fit.coeffs[0];
+        for ( int k = 1; k <= degree; ++k ) {
+          Du += fit.coeffs[k] * k * upow;
+          upow *= ui;
+          model += fit.coeffs[k] * upow;
+        }
+        const double resi = avg[i] - model;
+        const double factor = -2.0 / fit.r2_max * Du;
+        const double Jx = factor * ( x - fit.cx );
+        const double Jy = factor * ( y - fit.cy );
+        JJxx += Jx * Jx;
+        JJxy += Jx * Jy;
+        JJyy += Jy * Jy;
+        Jrx += Jx * resi;
+        Jry += Jy * resi;
+      }
+    }
+    const double det = JJxx * JJyy - JJxy * JJxy;
+    if ( std::abs( det ) < 1e-18 )
+      break; // singular — leave center where it is
+    double dcx = ( JJyy * Jrx - JJxy * Jry ) / det;
+    double dcy = ( JJxx * Jry - JJxy * Jrx ) / det;
+    // Cap the step at a quarter of the image size to keep early iterations
+    // sane if the initial residual happens to be dominated by scene structure.
+    const double max_step = 0.25 * std::min( width, height );
+    const double step = std::hypot( dcx, dcy );
+    if ( step > max_step ) {
+      dcx *= max_step / step;
+      dcy *= max_step / step;
+    }
+    fit.cx = std::clamp( fit.cx + dcx, 0.0, static_cast<double>( width - 1 ) );
+    fit.cy = std::clamp( fit.cy + dcy, 0.0, static_cast<double>( height - 1 ) );
+    computeU();
+    if ( !solveCoeffs( live ) )
+      return fit;
+    if ( std::hypot( dcx, dcy ) < kCenterTolPx )
+      break;
+  }
+
+  // Robust pass: compute residuals at the current (cx, cy, coeffs), reject
+  // pixels above 3·MAD, and refit coefficients. The center is not re-updated
+  // here — by this point it's already converged to sub-pixel tolerance.
+  std::vector<double> residuals( P, 0.0 );
   std::vector<double> abs_res_live;
-  abs_res_live.reserve( u.size() );
-  for ( size_t i = 0; i < u.size(); ++i ) {
+  abs_res_live.reserve( P );
+  for ( size_t i = 0; i < P; ++i ) {
     double model = 0.0;
     double up_i = 1.0;
     for ( int k = 0; k < N; ++k ) {
@@ -291,7 +364,7 @@ RadialFit fitRadialPolynomial( const std::vector<double> &avg, int width, int he
       up_i *= u[i];
     }
     residuals[i] = avg[i] - model;
-    if ( include1[i] )
+    if ( live[i] )
       abs_res_live.push_back( std::abs( residuals[i] ) );
   }
   double mad = 0.0;
@@ -302,22 +375,15 @@ RadialFit fitRadialPolynomial( const std::vector<double> &avg, int width, int he
   }
   // 1.4826 converts MAD to a stddev-equivalent for normal residuals.
   const double cutoff = std::max( 1.0, 3.0 * 1.4826 * mad );
-
-  std::vector<bool> include2( u.size(), false );
-  for ( size_t i = 0; i < u.size(); ++i )
-    include2[i] = include1[i] && std::abs( residuals[i] ) <= cutoff;
-
-  // Pass 2: dead + MAD outliers both excluded.
-  accumulate( &include2 );
-  std::vector<double> coeffs2 = b;
-  std::vector<double> A2 = A;
-  if ( solveLinear( A2, coeffs2, N ) )
-    fit.coeffs = coeffs2;
+  std::vector<bool> include_robust( P, false );
+  for ( size_t i = 0; i < P; ++i )
+    include_robust[i] = live[i] && std::abs( residuals[i] ) <= cutoff;
+  solveCoeffs( include_robust );
 
   // Compute the model's spatial mean — needed as the additive constant when
   // applying the correction so that overall image intensity is preserved.
   double sum = 0.0;
-  for ( size_t i = 0; i < u.size(); ++i ) {
+  for ( size_t i = 0; i < P; ++i ) {
     double model = 0.0;
     double up_i = 1.0;
     for ( int k = 0; k < N; ++k ) {
@@ -326,7 +392,7 @@ RadialFit fitRadialPolynomial( const std::vector<double> &avg, int width, int he
     }
     sum += model;
   }
-  fit.mean_model = sum / static_cast<double>( u.size() );
+  fit.mean_model = sum / static_cast<double>( P );
   return fit;
 }
 
@@ -357,6 +423,7 @@ int main( int argc, char **argv )
   int frames = 50;
   int warmup = 30;
   int degree = 3;
+  bool fit_center = true;
   bool write_diag = false;
   std::string serial;
   std::string port;
@@ -371,6 +438,8 @@ int main( int argc, char **argv )
       warmup = std::max( 0, std::atoi( argv[++i] ) );
     } else if ( arg == "--degree" && i + 1 < argc ) {
       degree = std::clamp( std::atoi( argv[++i] ), 1, 6 );
+    } else if ( arg == "--fix-center" ) {
+      fit_center = false;
     } else if ( arg == "--dead-pixels" && i + 1 < argc ) {
       dead_pixels_path = argv[++i];
     } else if ( arg == "--write-diagnostics" ) {
@@ -501,8 +570,8 @@ int main( int argc, char **argv )
   for ( size_t i = 0; i < pixel_count; ++i )
     avg[i] = static_cast<double>( sum[i] ) / static_cast<double>( frames );
 
-  RadialFit fit =
-      fitRadialPolynomial( avg, width, height, degree, dead_mask.empty() ? nullptr : &dead_mask );
+  RadialFit fit = fitRadialPolynomial( avg, width, height, degree, fit_center,
+                                       dead_mask.empty() ? nullptr : &dead_mask );
   if ( fit.coeffs.empty() ) {
     std::cerr << "Fit failed (degenerate normal equations).\n";
     camera->close();
@@ -540,6 +609,11 @@ int main( int argc, char **argv )
   std::cout << "Fit: c0=" << fit.coeffs[0];
   for ( int k = 1; k <= fit.degree; ++k ) std::cout << "  c" << k << "=" << fit.coeffs[k];
   std::cout << "\n";
+  const double img_cx = ( width - 1 ) * 0.5;
+  const double img_cy = ( height - 1 ) * 0.5;
+  std::cout << "  center=(" << std::fixed << std::setprecision( 2 ) << fit.cx << ", " << fit.cy
+            << ")  offset-from-image-center=(" << ( fit.cx - img_cx ) << ", " << ( fit.cy - img_cy )
+            << ") px\n";
   std::cout << "  mean_model=" << std::fixed << std::setprecision( 1 ) << fit.mean_model
             << "  edge-vs-centre swing=" << ( max_dev - min_dev ) << " counts\n";
   std::cout << "  residual RMS=" << rms << "  max|residual|=" << max_abs << " counts\n";
