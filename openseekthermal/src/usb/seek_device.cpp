@@ -2,9 +2,6 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 #include "openseekthermal/detail/usb/seek_device.hpp"
 #include "openseekthermal/detail/exceptions.hpp"
-#include "openseekthermal/detail/frame.hpp"
-#include <cstring>
-#include <iomanip>
 
 std::ostream &operator<<( std::ostream &os, const openseekthermal::SeekDevice &device )
 {
@@ -167,26 +164,6 @@ int SeekDevice::_getRowStep() const
     break;
   }
   throw InvalidDeviceError( "_getRowStep not implemented for" + to_string( type ) );
-}
-
-bool SeekDevice::_isCalibrationFrame( const std::vector<unsigned char> &buffer ) const
-{
-  switch ( type ) {
-  case Type::SeekThermalCompact:
-  case Type::SeekThermalCompactPro:
-  case Type::SeekThermalNano300: {
-    const int offset = FrameHeader::GetFrameTypeOffset( type );
-    if ( buffer.size() < static_cast<size_t>( offset ) + sizeof( uint16_t ) ) {
-      return false;
-    }
-    uint16_t raw_type;
-    std::memcpy( &raw_type, buffer.data() + offset, sizeof( uint16_t ) );
-    return le16toh( raw_type ) == 1;
-  }
-  default:
-    break;
-  }
-  throw InvalidDeviceError( "_isCalibrationFrame not implemented for" + to_string( type ) );
 }
 
 std::string to_string( SeekDevice::Type type )

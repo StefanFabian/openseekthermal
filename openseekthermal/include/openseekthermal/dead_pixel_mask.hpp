@@ -5,7 +5,6 @@
 #define OPENSEEKTHERMAL_DEAD_PIXEL_MASK_HPP
 
 #include <cstdint>
-#include <filesystem>
 #include <vector>
 
 namespace openseekthermal
@@ -27,8 +26,7 @@ struct DeadPixelEntry {
  * Sparse representation of a dead-pixel mask. Built once per camera and
  * applied per-frame; touches only the dead pixels themselves.
  *
- * Use loadDeadPixelMaskPgm() to build from a PGM file produced by
- * the calibrate_dead_pixels tool.
+ * Loaded as part of a CameraCalibration; see camera_calibration.hpp.
  */
 class DeadPixelMask
 {
@@ -43,7 +41,13 @@ public:
   DeadPixelMask( int width, int height, const std::vector<bool> &mask );
 
   /*!
-   * Apply the inpainting in-place to a width*height little-endian uint16
+   * Build from a list of (x, y) dead-pixel coordinates.
+   * @throws std::out_of_range if any coordinate is outside [0, width) × [0, height).
+   */
+  DeadPixelMask( int width, int height, const std::vector<std::pair<int, int>> &dead_coords );
+
+  /*!
+   * Apply the inpainting in-place to a width*height host-endian uint16
    * frame buffer. No-op for entries with zero valid neighbours.
    */
   void apply( uint16_t *frame ) const;
@@ -61,18 +65,6 @@ private:
   int height_ = 0;
   std::vector<DeadPixelEntry> entries_;
 };
-
-/*!
- * Load an 8-bit P5 PGM dead-pixel mask written by calibrate_dead_pixels.
- * Convention: non-zero byte = dead.
- *
- * @param path Path to the PGM file.
- * @param expected_width Frame width the mask must match (use camera->getFrameWidth()).
- * @param expected_height Frame height the mask must match.
- * @throws std::runtime_error on I/O / format / dimension errors.
- */
-DeadPixelMask loadDeadPixelMaskPgm( const std::filesystem::path &path, int expected_width,
-                                    int expected_height );
 
 } // namespace openseekthermal
 

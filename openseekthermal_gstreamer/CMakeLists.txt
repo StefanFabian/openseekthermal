@@ -9,19 +9,22 @@ endif()
 find_package(ament_cmake QUIET)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-plugins-base-1.0 gstreamer-pbutils-1.0)
+pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-plugins-base-1.0 gstreamer-pbutils-1.0 gstreamer-video-1.0)
+pkg_check_modules(CAIRO REQUIRED cairo)
 find_package(openseekthermal REQUIRED)
 
 add_library(openseekthermal_gstreamer SHARED
   src/gstopenseekthermalplugin.cpp
   src/gstopenseekthermalsrc.cpp
+  src/gstopenseekthermalcolorize.cpp
+  src/gstthermalscalemeta.cpp
 )
 target_include_directories(openseekthermal_gstreamer PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(openseekthermal_gstreamer PUBLIC openseekthermal::openseekthermal ${GST_LIBRARIES})
-target_include_directories(openseekthermal_gstreamer PRIVATE ${GST_INCLUDE_DIRS})
+target_link_libraries(openseekthermal_gstreamer PUBLIC openseekthermal::openseekthermal ${GST_LIBRARIES} ${CAIRO_LIBRARIES})
+target_include_directories(openseekthermal_gstreamer PRIVATE ${GST_INCLUDE_DIRS} ${CAIRO_INCLUDE_DIRS})
 
 install(TARGETS openseekthermal_gstreamer
   EXPORT openseekthermal_gstreamer-targets

@@ -27,8 +27,7 @@ struct _GstOpenSeekThermalSrc {
   GstPushSrc parent;
   gchar *serial;
   gchar *port;
-  gchar *dead_pixel_mask_path;
-  gchar *vignette_correction_path;
+  gchar *calibration_path;
   gboolean skip_invalid_frames;
   gboolean normalize;
   guint normalize_frame_count;

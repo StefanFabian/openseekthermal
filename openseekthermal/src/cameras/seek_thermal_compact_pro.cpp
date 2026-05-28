@@ -4,6 +4,7 @@
 #include "openseekthermal/detail//cameras/seek_thermal_compact_pro.hpp"
 #include "openseekthermal/detail/exceptions.hpp"
 #include <cassert>
+#include <cstring>
 
 #include "../logging.hpp"
 
@@ -62,7 +63,40 @@ void SeekThermalCompactPro::setupCamera()
           "Failed to set factory settings features to 0x20 0x00 0x00 0x00 0x00 0x00!" );
     if ( data.resize( 64 ); !read( SeekDeviceCommand::GET_FACTORY_SETTINGS, data ) )
       throw SeekSetupError( "Failed to read factory settings features!" );
+    // Pages are 64 bytes on a 32-byte stride, but the overlapping first 32
+    // bytes of each non-initial page are inconsistent with the second half of
+    // the previous page (the camera returns different data for the same
+    // factory address depending on which page request was used). The
+    // factory anchor table (5 records × 4 f32) starts at factory byte 0x44:
+    //   anchor[0] = (raw_at_T_ref, ?, T_ref_C=22, count=3)
+    //   anchor[1] = (BB_T_C, BB_lnR, anchor1_f2, BB_emissivity_x100)
+    //   anchor[2] = (lnR_ref, 4·B_ntc, T_factory_K, ?)
+    // The housing-NTC Beta thermometer needs anchor[1].f[2] and anchor[2].f[1].
+    if ( addr == 0x20 && data.size() >= 0x40 ) {
+      float v;
+      std::memcpy( &v, data.data() + 0x24, sizeof( v ) );
+      factory_raw_at_T_ref_ = v;
+      std::memcpy( &v, data.data() + 0x2c, sizeof( v ) );
+      factory_T_ref_ = v;
+      float anchor1_f2;
+      std::memcpy( &anchor1_f2, data.data() + 0x3c, sizeof( anchor1_f2 ) );
+      if ( factory_T_ref_ > 0.0f )
+        factory_housing_K_ = factory_raw_at_T_ref_ - anchor1_f2 / factory_T_ref_;
+    }
+    if ( addr == 0x40 && data.size() >= 0x0c ) {
+      float anchor2_f1;
+      std::memcpy( &anchor2_f1, data.data() + 0x08, sizeof( anchor2_f1 ) );
+      factory_housing_B_ = anchor2_f1 / 4.0f;
+    }
   }
+  if ( factory_raw_at_T_ref_ > 0.0 && factory_housing_K_ > 0.0 && factory_housing_B_ > 0.0 &&
+       factory_housing_K_ < factory_raw_at_T_ref_ ) {
+    factory_housing_valid_ = true;
+  }
+  // Substrate-drift slope, fit on `contwarmup-compactpro-80C-20260517-171127`
+  // (R²=1.000, slope 1.04). The CP shows tighter pad-vs-scene coupling than
+  // the Nano (likely a substrate/optics-geometry effect).
+  substrate_drift_coefficient_ = 1.04;
 
   if ( !write( SeekDeviceCommand::SET_FIRMWARE_INFO_FEATURES, { 0x15, 0x00 } ) )
     throw SeekSetupError( "Failed to set firmware info features to 0x15 0x00!" );

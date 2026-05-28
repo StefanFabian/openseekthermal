@@ -6,6 +6,7 @@
 
 #include "./detail/cameras/seek_thermal_camera.hpp"
 #include "./detail/usb/seek_device.hpp"
+#include "./temperature_calibration.hpp"
 #include <vector>
 
 struct libusb_device;

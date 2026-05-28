@@ -57,8 +57,8 @@
 //   * If the median stddev is very small the tool warns: that means the scene
 //     wasn't varied enough during capture and the STUCK pass is unreliable.
 
+#include "openseekthermal/camera_calibration.hpp"
 #include "openseekthermal/openseekthermal.hpp"
-#include "openseekthermal/vignette_correction.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -84,7 +84,11 @@ void printUsage( const char *argv0 )
 {
   std::cout
       << "Usage: " << argv0 << " [options]\n"
-      << "  --out PATH               output mask file (default dead_pixels.pgm)\n"
+      << "  --calibration PATH       unified calibration file to update (default "
+         "calibration.ini).\n"
+      << "                             Reads [vignette] (if present) for de-vignetting, writes "
+         "the\n"
+      << "                             [dead_pixels] section back.\n"
       << "  --frames N               number of thermal frames to capture (default 200)\n"
       << "  --warmup K               frames to discard before capture (default 30)\n"
       << "  --offset-k K             offset MAD multiplier for DC-offset pixels (default 8.0)\n"
@@ -93,8 +97,7 @@ void printUsage( const char *argv0 )
       << "                             (default 0.3 — i.e. < 30% of median stddev)\n"
       << "  --stuck-floor F          absolute stddev floor below which a pixel is stuck\n"
       << "                             regardless of --stuck-k (default 2.0 counts)\n"
-      << "  --vignette PATH          subtract this radial vignette fit before offset detection\n"
-      << "  --write-diagnostics      also write mean/stddev/residual PGMs next to --out\n"
+      << "  --write-diagnostics      also write mean/stddev/residual PGMs next to --calibration\n"
       << "  --serial S | --port P    device selector\n"
       << "\n"
       << "Capture: PAN / SWEEP THE CAMERA across a varied scene during capture.\n"
@@ -178,22 +181,21 @@ double median( std::vector<double> values )
 
 int main( int argc, char **argv )
 {
-  fs::path out_path = "dead_pixels.pgm";
+  fs::path calibration_path = "calibration.ini";
   int frames = 200;
   int warmup = 30;
   double k_offset = 8.0;
   double k_noisy = 6.0;
   double k_stuck = 0.3;
   double stuck_floor = 2.0;
-  fs::path vignette_path;
   bool write_diag = false;
   std::string serial;
   std::string port;
 
   for ( int i = 1; i < argc; ++i ) {
     std::string arg = argv[i];
-    if ( ( arg == "--out" || arg == "-o" ) && i + 1 < argc ) {
-      out_path = argv[++i];
+    if ( ( arg == "--calibration" || arg == "-c" ) && i + 1 < argc ) {
+      calibration_path = argv[++i];
     } else if ( arg == "--frames" && i + 1 < argc ) {
       frames = std::max( 4, std::atoi( argv[++i] ) );
     } else if ( arg == "--warmup" && i + 1 < argc ) {
@@ -206,8 +208,6 @@ int main( int argc, char **argv )
       k_stuck = std::atof( argv[++i] );
     } else if ( arg == "--stuck-floor" && i + 1 < argc ) {
       stuck_floor = std::atof( argv[++i] );
-    } else if ( arg == "--vignette" && i + 1 < argc ) {
-      vignette_path = argv[++i];
     } else if ( arg == "--write-diagnostics" ) {
       write_diag = true;
     } else if ( arg == "--serial" && i + 1 < argc ) {
@@ -266,12 +266,13 @@ int main( int argc, char **argv )
   const int height = camera->getFrameHeight();
   const size_t pixel_count = static_cast<size_t>( width ) * height;
 
-  std::optional<VignetteCorrection> vignette;
-  if ( !vignette_path.empty() ) {
+  CameraCalibration cal;
+  if ( fs::exists( calibration_path ) ) {
     try {
-      vignette = loadVignetteCorrection( vignette_path, width, height );
+      cal = loadCameraCalibration( calibration_path, width, height );
     } catch ( const std::exception &e ) {
-      std::cerr << "Failed to load vignette '" << vignette_path.string() << "': " << e.what() << "\n";
+      std::cerr << "Failed to read existing calibration '" << calibration_path.string()
+                << "': " << e.what() << "\n";
       camera->close();
       return 1;
     }
@@ -346,11 +347,11 @@ int main( int argc, char **argv )
 
   // Optional vignette removal (improves spatial sensitivity in the corners).
   std::vector<double> mean_devignette = mean_buf;
-  if ( vignette ) {
+  if ( cal.vignette ) {
     for ( int y = 0; y < height; ++y ) {
       for ( int x = 0; x < width; ++x ) {
-        const double v = vignette->evaluate( x, y );
-        mean_devignette[y * width + x] -= ( v - vignette->mean_model );
+        const double v = cal.vignette->evaluate( x, y );
+        mean_devignette[y * width + x] -= ( v - cal.vignette->mean_model );
       }
     }
   }
@@ -416,15 +417,29 @@ int main( int argc, char **argv )
                  "      unreliable. Re-run while panning the camera across a varied scene.\n";
   }
 
-  if ( !writePgm8( out_path, mask, width, height ) ) {
-    std::cerr << "Failed to write mask to '" << out_path.string() << "'\n";
+  std::vector<std::pair<int, int>> dead_coords;
+  dead_coords.reserve( total_dead );
+  for ( int y = 0; y < height; ++y ) {
+    for ( int x = 0; x < width; ++x ) {
+      if ( mask[static_cast<size_t>( y ) * width + x] != 0 )
+        dead_coords.emplace_back( x, y );
+    }
+  }
+  cal.dead_pixels = DeadPixelMask( width, height, dead_coords );
+  std::ostringstream hdr;
+  hdr << "Dead-pixel mask (" << total_dead << " entries) generated by calibrate_dead_pixels.";
+  try {
+    saveCameraCalibration( calibration_path, cal, hdr.str() );
+  } catch ( const std::exception &e ) {
+    std::cerr << "Failed to write calibration '" << calibration_path.string() << "': " << e.what()
+              << "\n";
     camera->close();
     return 1;
   }
-  std::cout << "Wrote " << out_path.string() << "\n";
+  std::cout << "Wrote " << calibration_path.string() << " [dead_pixels]\n";
 
   if ( write_diag ) {
-    fs::path stem = out_path;
+    fs::path stem = calibration_path;
     stem.replace_extension( "" );
     std::vector<uint16_t> mean_pgm( pixel_count );
     std::vector<uint16_t> stddev_pgm( pixel_count );

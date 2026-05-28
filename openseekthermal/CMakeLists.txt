@@ -26,6 +26,7 @@ add_library(openseekthermal SHARED
   src/cameras/seek_thermal_compact_pro.cpp
   src/cameras/seek_thermal_nano_300.cpp
   src/usb/seek_device.cpp
+  src/camera_calibration.cpp
   src/dead_pixel_mask.cpp
   src/vignette_correction.cpp
   src/exceptions.cpp
@@ -96,7 +97,7 @@ configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/openseekthermal-
 # Generate the version file for the config file
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/openseekthermal-config-version.cmake"
-  VERSION 1.0.0
+  VERSION 2.0.0
   COMPATIBILITY SameMajorVersion
 )
 

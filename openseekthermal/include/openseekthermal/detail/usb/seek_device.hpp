@@ -7,7 +7,6 @@
 #include "../framerate.hpp"
 #include <cstdint>
 #include <iostream>
-#include <vector>
 
 namespace openseekthermal
 {
@@ -59,8 +58,6 @@ struct SeekDevice {
 
   //! Get the size of the frame row header in bytes.
   int _getRowStep() const;
-
-  bool _isCalibrationFrame( const std::vector<unsigned char> &buffer ) const;
 };
 
 inline SeekDevice::Type operator|( SeekDevice::Type a, SeekDevice::Type b )

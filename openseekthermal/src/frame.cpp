@@ -42,7 +42,9 @@ size_t FrameHeader::GetMinHeaderSize( SeekDevice::Type type )
     return 82;
   case SeekDevice::Type::SeekThermalCompactPro:
   case SeekDevice::Type::SeekThermalNano300:
-    return 32; // Need only 6 but 32 is a good number
+    // Full header: rows 0-2 (row 2 = per-column dark reference, useful for
+    // drift analysis). Row 3 is all zeros on thermal frames, excluded.
+    return 2052;
   default:
     break;
   }
@@ -71,6 +73,24 @@ uint16_t FrameHeader::_getRawFrameType() const
   return le16toh( *reinterpret_cast<const uint16_t *>( &data_[offset] ) );
 }
 
+uint16_t FrameHeader::getCountsPer100Celsius() const
+{
+  // Row 1 byte 16 = transfer byte 700. Only tested for Nano 300 / Compact Pro.
+  // TODO: Check where it is for Compact and Nano 200, when access to one of those
+  constexpr size_t kOffset = 684 + 16;
+  if ( data_.size() < kOffset + 2 )
+    return 0;
+  return le16toh( *reinterpret_cast<const uint16_t *>( &data_[kOffset] ) );
+}
+
+uint16_t FrameHeader::getHousingAdc() const
+{
+  constexpr size_t kOffset = 0x0a;
+  if ( data_.size() < kOffset + 2 )
+    return 0;
+  return le16toh( *reinterpret_cast<const uint16_t *>( &data_[kOffset] ) );
+}
+
 FrameType FrameHeader::getFrameType() const
 {
   if ( type_ == SeekDevice::Type::None )
@@ -83,10 +103,14 @@ FrameType FrameHeader::getFrameType() const
     return FrameType::THERMAL_FRAME;
   case 4:
     return FrameType::FIRST_FRAME;
+  case 8:
+    return FrameType::STARTUP_CALIBRATION_FRAME;
   case 6:
     return FrameType::BEFORE_CALIBRATION_FRAME;
   case 20:
     return FrameType::AFTER_CALIBRATION_FRAME;
+  case 7:
+    return FrameType::STARTUP_AFTER_CALIBRATION_FRAME;
   default:
     break;
   }
@@ -102,10 +126,14 @@ std::string to_string( FrameType type )
     return "THERMAL_FRAME";
   case FrameType::FIRST_FRAME:
     return "FIRST_FRAME";
+  case FrameType::STARTUP_CALIBRATION_FRAME:
+    return "STARTUP_CALIBRATION_FRAME";
   case FrameType::BEFORE_CALIBRATION_FRAME:
     return "BEFORE_CALIBRATION_FRAME";
   case FrameType::AFTER_CALIBRATION_FRAME:
     return "AFTER_CALIBRATION_FRAME";
+  case FrameType::STARTUP_AFTER_CALIBRATION_FRAME:
+    return "STARTUP_AFTER_CALIBRATION_FRAME";
   case FrameType::UNKNOWN:
     return "UNKNOWN";
   }

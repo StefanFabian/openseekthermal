@@ -45,6 +45,7 @@
 //   * Diagnostic outputs (--write-diagnostics) include the per-pixel
 //     residual; a clean fit has residuals < a few hundred counts.
 
+#include "openseekthermal/camera_calibration.hpp"
 #include "openseekthermal/openseekthermal.hpp"
 
 #include <algorithm>
@@ -68,18 +69,19 @@ namespace
 
 void printUsage( const char *argv0 )
 {
-  std::cout << "Usage: " << argv0 << " [options]\n"
-            << "  --out PATH         output file for fit coefficients (default vignette.ini)\n"
-            << "  --frames N         number of thermal frames to average (default 50)\n"
-            << "  --warmup K         frames to discard before capture (default 30)\n"
-            << "  --degree D         polynomial degree in r² (default 3, range 1..6)\n"
-            << "  --fix-center       lock the optical center to the image center instead of\n"
-            << "                       jointly fitting it (use if the joint fit drifts on a\n"
-            << "                       poor target)\n"
-            << "  --dead-pixels PATH  PGM mask from calibrate_dead_pixels; flagged pixels are\n"
-            << "                       excluded from the fit (255 = dead, 0 = good)\n"
-            << "  --write-diagnostics  also write average / model / residual PGMs next to --out\n"
-            << "  --serial S | --port P  device selector\n";
+  std::cout
+      << "Usage: " << argv0 << " [options]\n"
+      << "  --calibration PATH unified calibration file to update (default calibration.ini).\n"
+      << "                       Reads [dead_pixels] (if present) for fit exclusion, writes\n"
+      << "                       the [vignette] section back.\n"
+      << "  --frames N         number of thermal frames to average (default 50)\n"
+      << "  --warmup K         frames to discard before capture (default 30)\n"
+      << "  --degree D         polynomial degree in r² (default 3, range 1..6)\n"
+      << "  --fix-center       lock the optical center to the image center instead of\n"
+      << "                       jointly fitting it (use if the joint fit drifts on a\n"
+      << "                       poor target)\n"
+      << "  --write-diagnostics  also write average / model / residual PGMs next to --calibration\n"
+      << "  --serial S | --port P  device selector\n";
 }
 
 bool writePgm16BE( const fs::path &path, const std::vector<uint16_t> &data, int width, int height )
@@ -96,63 +98,6 @@ bool writePgm16BE( const fs::path &path, const std::vector<uint16_t> &data, int 
   out.write( reinterpret_cast<const char *>( bytes.data() ),
              static_cast<std::streamsize>( bytes.size() ) );
   return out.good();
-}
-
-// Loads an 8-bit P5 PGM dead-pixel mask (the format written by
-// calibrate_dead_pixels). Non-zero byte = dead.
-bool loadDeadMaskPgm( const fs::path &path, int expected_width, int expected_height,
-                      std::vector<bool> &out_mask, std::string &error )
-{
-  std::ifstream in( path, std::ios::binary );
-  if ( !in ) {
-    error = "could not open file";
-    return false;
-  }
-  std::string magic;
-  in >> magic;
-  if ( magic != "P5" ) {
-    error = "not a P5 PGM";
-    return false;
-  }
-  auto skipWhitespaceAndComments = [&]() {
-    char c;
-    while ( in.get( c ) ) {
-      if ( c == '#' ) {
-        while ( in.get( c ) && c != '\n' ) { }
-      } else if ( !std::isspace( static_cast<unsigned char>( c ) ) ) {
-        in.unget();
-        break;
-      }
-    }
-  };
-  skipWhitespaceAndComments();
-  int w = 0;
-  in >> w;
-  skipWhitespaceAndComments();
-  int h = 0;
-  in >> h;
-  skipWhitespaceAndComments();
-  int maxval = 0;
-  in >> maxval;
-  in.get(); // consume the single byte of whitespace after maxval
-  if ( maxval != 255 ) {
-    error = "expected 8-bit PGM (maxval 255), got " + std::to_string( maxval );
-    return false;
-  }
-  if ( w != expected_width || h != expected_height ) {
-    error = "size " + std::to_string( w ) + "x" + std::to_string( h ) + " does not match camera " +
-            std::to_string( expected_width ) + "x" + std::to_string( expected_height );
-    return false;
-  }
-  std::vector<uint8_t> bytes( static_cast<size_t>( w ) * h );
-  in.read( reinterpret_cast<char *>( bytes.data() ), static_cast<std::streamsize>( bytes.size() ) );
-  if ( !in ) {
-    error = "short read";
-    return false;
-  }
-  out_mask.assign( bytes.size(), false );
-  for ( size_t i = 0; i < bytes.size(); ++i ) out_mask[i] = bytes[i] != 0;
-  return true;
 }
 
 struct RadialFit {
@@ -396,30 +341,25 @@ RadialFit fitRadialPolynomial( const std::vector<double> &avg, int width, int he
   return fit;
 }
 
-void writeFit( const RadialFit &f, const fs::path &p, const SeekDevice &device, int frames_used )
+VignetteCorrection toVignetteCorrection( const RadialFit &f )
 {
-  std::ofstream out( p );
-  out << std::setprecision( 9 );
-  out << "; openseekthermal vignette correction (radial polynomial in r²)\n";
-  out << "; device " << device << "\n";
-  out << "; frames " << frames_used << "\n";
-  out << "\n[vignette]\n";
-  out << "width = " << f.width << "\n";
-  out << "height = " << f.height << "\n";
-  out << "center_x = " << f.cx << "\n";
-  out << "center_y = " << f.cy << "\n";
-  out << "r2_max = " << f.r2_max << "\n";
-  out << "degree = " << f.degree << "\n";
-  out << "mean_model = " << f.mean_model << "\n";
-  for ( int k = 0; k <= f.degree; ++k ) out << "c" << k << " = " << f.coeffs[k] << "\n";
+  VignetteCorrection v;
+  v.width = f.width;
+  v.height = f.height;
+  v.cx = f.cx;
+  v.cy = f.cy;
+  v.r2_max = f.r2_max;
+  v.degree = f.degree;
+  v.mean_model = f.mean_model;
+  v.coeffs.assign( f.coeffs.begin(), f.coeffs.end() );
+  return v;
 }
 
 } // namespace
 
 int main( int argc, char **argv )
 {
-  fs::path out_path = "vignette.ini";
-  fs::path dead_pixels_path;
+  fs::path calibration_path = "calibration.ini";
   int frames = 50;
   int warmup = 30;
   int degree = 3;
@@ -430,8 +370,8 @@ int main( int argc, char **argv )
 
   for ( int i = 1; i < argc; ++i ) {
     std::string arg = argv[i];
-    if ( ( arg == "--out" || arg == "-o" ) && i + 1 < argc ) {
-      out_path = argv[++i];
+    if ( ( arg == "--calibration" || arg == "-c" ) && i + 1 < argc ) {
+      calibration_path = argv[++i];
     } else if ( arg == "--frames" && i + 1 < argc ) {
       frames = std::max( 1, std::atoi( argv[++i] ) );
     } else if ( arg == "--warmup" && i + 1 < argc ) {
@@ -440,8 +380,6 @@ int main( int argc, char **argv )
       degree = std::clamp( std::atoi( argv[++i] ), 1, 6 );
     } else if ( arg == "--fix-center" ) {
       fit_center = false;
-    } else if ( arg == "--dead-pixels" && i + 1 < argc ) {
-      dead_pixels_path = argv[++i];
     } else if ( arg == "--write-diagnostics" ) {
       write_diag = true;
     } else if ( arg == "--serial" && i + 1 < argc ) {
@@ -500,17 +438,23 @@ int main( int argc, char **argv )
   const int height = camera->getFrameHeight();
   const size_t pixel_count = static_cast<size_t>( width ) * height;
 
+  CameraCalibration cal;
   std::vector<bool> dead_mask;
   size_t n_dead = 0;
-  if ( !dead_pixels_path.empty() ) {
-    std::string err;
-    if ( !loadDeadMaskPgm( dead_pixels_path, width, height, dead_mask, err ) ) {
-      std::cerr << "Failed to load dead pixel mask '" << dead_pixels_path.string() << "': " << err
-                << "\n";
+  if ( fs::exists( calibration_path ) ) {
+    try {
+      cal = loadCameraCalibration( calibration_path, width, height );
+    } catch ( const std::exception &e ) {
+      std::cerr << "Failed to read existing calibration '" << calibration_path.string()
+                << "': " << e.what() << "\n";
       camera->close();
       return 1;
     }
-    n_dead = static_cast<size_t>( std::count( dead_mask.begin(), dead_mask.end(), true ) );
+    if ( cal.dead_pixels ) {
+      dead_mask.assign( pixel_count, false );
+      for ( const auto &entry : cal.dead_pixels->entries() ) { dead_mask[entry.index] = true; }
+      n_dead = cal.dead_pixels->deadPixelCount();
+    }
     if ( n_dead >= pixel_count ) {
       std::cerr << "All pixels in mask are flagged dead — refusing to fit.\n";
       camera->close();
@@ -522,8 +466,8 @@ int main( int argc, char **argv )
             << ", degree " << degree << ")\n";
   std::cout << "  warmup: " << warmup << " frames, averaging: " << frames << " thermal frames\n";
   if ( !dead_mask.empty() )
-    std::cout << "  excluding " << n_dead << " dead pixels from fit (loaded from "
-              << dead_pixels_path.string() << ")\n";
+    std::cout << "  excluding " << n_dead << " dead pixels from fit (from "
+              << calibration_path.string() << " [dead_pixels])\n";
 
   // Warmup.
   for ( int i = 0; i < warmup; ++i ) {
@@ -629,11 +573,22 @@ int main( int argc, char **argv )
                  "      or trust the radial fit only.\n";
   }
 
-  writeFit( fit, out_path, device, frames );
-  std::cout << "Wrote " << out_path.string() << "\n";
+  cal.vignette = toVignetteCorrection( fit );
+  std::ostringstream hdr;
+  hdr << "openseekthermal vignette correction (radial polynomial in r²) for " << device << " from "
+      << frames << " frames.";
+  try {
+    saveCameraCalibration( calibration_path, cal, hdr.str() );
+  } catch ( const std::exception &e ) {
+    std::cerr << "Failed to write calibration '" << calibration_path.string() << "': " << e.what()
+              << "\n";
+    camera->close();
+    return 1;
+  }
+  std::cout << "Wrote " << calibration_path.string() << " [vignette]\n";
 
   if ( write_diag ) {
-    fs::path stem = out_path;
+    fs::path stem = calibration_path;
     stem.replace_extension( "" );
     std::vector<uint16_t> avg_pgm( pixel_count );
     std::vector<uint16_t> model_pgm( pixel_count );
