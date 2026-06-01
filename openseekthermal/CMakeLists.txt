@@ -65,9 +65,19 @@ if (BUILD_TOOLS)
   add_executable(list_seek_devices src/tools/list_seek_devices.cpp)
   target_link_libraries(list_seek_devices openseekthermal)
 
+  add_executable(calibration_tool
+    src/tools/calibration_tool.cpp
+    src/tools/common/fit_vignette.cpp
+    src/tools/common/detect_dead_pixels.cpp
+    src/tools/common/fit_temperature.cpp
+    src/tools/common/capture_helpers.cpp
+    src/tools/common/terminal_preview.cpp
+  )
+  target_link_libraries(calibration_tool openseekthermal)
+
   if (ament_cmake_FOUND)
     install(
-      TARGETS calibrate_vignette calibrate_dead_pixels list_seek_devices
+      TARGETS list_seek_devices calibration_tool
       RUNTIME DESTINATION lib/${PROJECT_NAME}
     )
   endif ()

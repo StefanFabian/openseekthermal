@@ -21,6 +21,9 @@ namespace openseekthermal
 SeekThermalCamera::SeekThermalCamera( SeekDevice device, libusb_context *usb_context ) noexcept
     : device_( std::move( device ) ), usb_context_( usb_context )
 {
+  // Default to the USB-advertised serial (Nano 300). Products that don't expose
+  // it over USB overwrite this from factory data in setupCamera().
+  serial_number_ = device_.serial;
 }
 
 SeekThermalCamera::~SeekThermalCamera()
@@ -275,8 +278,8 @@ bool SeekThermalCamera::triggerShutter()
   return write( SeekDeviceCommand::TOGGLE_SHUTTER, { 0xFC, 0x00, 0x04, 0x00 } );
 }
 
-GrabFrameResult SeekThermalCamera::grabFrame( unsigned char **image_data, size_t &size,
-                                              FrameHeader *header )
+GrabFrameResult SeekThermalCamera::grabRawCountsFrame( unsigned char **image_data, size_t &size,
+                                                       FrameHeader *header )
 {
   std::lock_guard device_lock( device_mutex_ );
   std::lock_guard buffer_lock( buffer_mutex_ );
@@ -337,7 +340,7 @@ GrabFrameResult SeekThermalCamera::grabFrame( unsigned char **image_data, size_t
   if ( frame_type != FrameType::THERMAL_FRAME )
     return GrabFrameResult::SUCCESS;
 
-  // Thermal-only pipeline: shutter → dead-pixel → vignette → drift → T-mapping.
+  // Thermal-only count pipeline: shutter → dead-pixel → vignette → drift.
   auto *pixels = reinterpret_cast<uint16_t *>( *image_data );
   if ( shutter_correction_enabled_ && shutter_offset_.size() == pixel_count ) {
     for ( size_t i = 0; i < pixel_count; ++i ) {
@@ -351,23 +354,8 @@ GrabFrameResult SeekThermalCamera::grabFrame( unsigned char **image_data, size_t
   if ( calibration_.vignette ) {
     calibration_.vignette->apply( pixels );
   }
-  // Pick the temperature calibration to apply. User-supplied takes
-  // precedence; otherwise compute the factory two-point anchor per frame
-  // (cheap, and lets per-frame c1 changes propagate if the firmware ever
-  // varies u16@row1+16 across frames).
-  const TemperatureCalibration *cal_to_apply = nullptr;
-  TemperatureCalibration default_cal;
-  if ( calibration_.temperature ) {
-    cal_to_apply = &*calibration_.temperature;
-  } else {
-    default_cal.c1 = 100.0 / static_cast<double>( internal_header.getCountsPer100Celsius() );
-    default_cal.c0 = factory_T_ref_ - default_cal.c1 * factory_raw_at_T_ref_;
-    cal_to_apply = &default_cal;
-  }
   // In-band substrate-drift compensation; see setDriftCompensationEnabled()
-  // docstring for the full model. Earlier prototypes used a housing-NTC
-  // K_sub term here, which overcompensated warm boots by several °C — left
-  // as a note so we don't reintroduce it.
+  // docstring for the full model.
   int32_t drift_offset_int = 0;
   const bool drift_active = substrate_drift_coefficient_ > 0.0 && drift_compensation_enabled_;
   if ( drift_active && drift_anchor_set_ ) {
@@ -380,13 +368,32 @@ GrabFrameResult SeekThermalCamera::grabFrame( unsigned char **image_data, size_t
   }
   if ( drift_offset_int != 0 ) {
     for ( size_t i = 0; i < pixel_count; ++i ) {
-      const int32_t corrected =
-          std::clamp( static_cast<int32_t>( pixels[i] ) - drift_offset_int, 0, 0xFFFF );
-      pixels[i] = cal_to_apply->apply( static_cast<uint16_t>( corrected ) );
+      const int32_t corrected = static_cast<int32_t>( pixels[i] ) - drift_offset_int;
+      pixels[i] = static_cast<uint16_t>( std::clamp( corrected, 0, 0xFFFF ) );
     }
-  } else {
-    for ( size_t i = 0; i < pixel_count; ++i ) { pixels[i] = cal_to_apply->apply( pixels[i] ); }
   }
+  return GrabFrameResult::SUCCESS;
+}
+
+GrabFrameResult SeekThermalCamera::grabFrame( unsigned char **image_data, size_t &size,
+                                              FrameHeader *header )
+{
+  FrameHeader internal_header;
+  if ( GrabFrameResult result = grabRawCountsFrame( image_data, size, &internal_header );
+       result != GrabFrameResult::SUCCESS )
+    return result;
+  if ( header != nullptr )
+    *header = internal_header;
+  if ( image_data == nullptr || internal_header.getFrameType() != FrameType::THERMAL_FRAME )
+    return GrabFrameResult::SUCCESS;
+
+  // Map drift-compensated counts to centi-Kelvin.
+  std::lock_guard buffer_lock( buffer_mutex_ );
+  const size_t pixel_count =
+      static_cast<size_t>( getFrameWidth() ) * static_cast<size_t>( getFrameHeight() );
+  auto *pixels = reinterpret_cast<uint16_t *>( *image_data );
+  const TemperatureCalibration &cal_to_apply = *calibration_.temperature;
+  for ( size_t i = 0; i < pixel_count; ++i ) { pixels[i] = cal_to_apply.apply( pixels[i] ); }
   return GrabFrameResult::SUCCESS;
 }
 
@@ -472,6 +479,18 @@ bool SeekThermalCamera::tryConsumeStartupFrames()
             transfer.begin() +
                 std::min<size_t>( buf_size, FrameHeader::GetMinHeaderSize( device_.type ) ) ) );
     const FrameType ft = header.getFrameType();
+    // Seed the factory two-point temperature mapping from the per-unit firmware
+    // slope (row 1 byte 16, present in every transfer) unless one is already
+    // installed, so the driver has a valid mapping for the whole session.
+    if ( !calibration_.temperature ) {
+      const uint16_t counts = header.getCountsPer100Celsius();
+      if ( counts != 0 && factory_raw_at_T_ref_ > 0.0 && factory_T_ref_ > 0.0 ) {
+        TemperatureCalibration t;
+        t.c1 = 100.0 / static_cast<double>( counts );
+        t.c0 = factory_T_ref_ - t.c1 * factory_raw_at_T_ref_;
+        calibration_.temperature = t;
+      }
+    }
     if ( !ft4_seen && ft == FrameType::FIRST_FRAME ) {
       const double pad = computePadDriftSignal( transfer.data(), buf_size );
       if ( pad > 0.0 ) {
@@ -489,8 +508,13 @@ bool SeekThermalCamera::tryConsumeStartupFrames()
         LOG_DEBUG( "[ffc] startup shutter reference captured (mean=" << last_shutter_mean_ << ")" );
       }
     }
-    if ( ft4_seen && ft8_seen )
+    if ( ft4_seen && ft8_seen ) {
+      if ( !calibration_.temperature ) {
+        // If none could be found, cancel it out so it's just the counts.
+        calibration_.temperature = TemperatureCalibration{ -273.15, 0.01 };
+      }
       return true;
+    }
   }
   return false;
 }
@@ -559,13 +583,11 @@ void SeekThermalCamera::setCalibration( CameraCalibration cal )
     throw std::invalid_argument( "Dead-pixel mask dimensions do not match camera frame" );
   }
   std::lock_guard buffer_lock( buffer_mutex_ );
+  // Keep the active temperature mapping (factory default from open(), or a
+  // previously installed one) when the incoming calibration omits it.
+  if ( !cal.temperature )
+    cal.temperature = calibration_.temperature;
   calibration_ = std::move( cal );
-}
-
-void SeekThermalCamera::clearCalibration()
-{
-  std::lock_guard buffer_lock( buffer_mutex_ );
-  calibration_ = {};
 }
 
 double SeekThermalCamera::computeHousingTemperature( uint16_t housing_adc ) const noexcept

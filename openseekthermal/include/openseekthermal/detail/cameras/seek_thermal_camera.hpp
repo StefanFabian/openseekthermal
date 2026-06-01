@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 struct libusb_context;
@@ -66,6 +67,15 @@ public:
    */
   GrabFrameResult grabFrame( unsigned char **image_data, size_t &size, FrameHeader *header = nullptr );
 
+  /*!
+   * Like `grabFrame()` but stops before the temperature mapping: for a
+   * THERMAL_FRAME `image_data` holds the shutter-corrected, dead-pixel-inpainted,
+   * vignette-corrected, drift-compensated raw counts.
+   * Non-thermal frames are returned exactly as by `grabFrame()`.
+   */
+  GrabFrameResult grabRawCountsFrame( unsigned char **image_data, size_t &size,
+                                      FrameHeader *header = nullptr );
+
   GrabFrameResult _grabRawFrame( unsigned char **frame_data, size_t &size );
 
   //! Send a TOGGLE_SHUTTER (0x37) command to the device, forcing a shutter
@@ -86,12 +96,17 @@ public:
 
   std::string readChipID();
 
+  //! Device serial number. For the Nano 300 this is the serial advertised over
+  //! USB; the Compact Pro does not advertise one, so its serial is read from
+  //! factory data during `setupCamera()`. Empty when unavailable.
+  const std::string &getSerialNumber() const noexcept { return serial_number_; }
+
   /*!
    * Install a unified CameraCalibration. Replaces any previously installed
-   * sections. Temperature, vignette and dead-pixel sections are each
-   * optional. The temperature section overrides the camera-derived two-point
-   * anchor (`c0`, `c1`); leaving the temperature section empty reverts to
-   * the camera-derived anchor.
+   * sections. Temperature, vignette and dead-pixel sections are each optional.
+   * A temperature section overrides the factory two-point anchor seeded at
+   * open(); omitting it keeps the currently active temperature mapping (the
+   * factory anchor unless a previous call set one).
    *
    * The in-band substrate-drift compensation (see
    * `setDriftCompensationEnabled`) runs on the raw counts regardless of
@@ -103,12 +118,8 @@ public:
    */
   void setCalibration( CameraCalibration cal );
 
-  //! Remove any installed calibration. The camera reverts to emitting cK
-  //! using the camera-derived two-point anchor (factory `(raw_at_T_ref,
-  //! T_ref)` + per-unit firmware slope `c1 = 100/u16@row1+16`), or raw counts
-  //! if the factory anchor was never read. Drift compensation is independent
-  //! of this call; toggle it via `setDriftCompensationEnabled()`.
-  void clearCalibration();
+  //! Get the currently used CameraCalibration.
+  const CameraCalibration &calibration() const noexcept { return calibration_; }
 
   /*!
    * Enable or disable host-side one-point flat-field correction using the
@@ -211,6 +222,11 @@ protected:
   //! `setupCamera()`; 0 disables the in-band drift compensation.
   double substrate_drift_coefficient_ = 0.0;
 
+  //! Device serial. Seeded from the USB-advertised serial in the constructor;
+  //! per-device `setupCamera()` overwrites it when the serial must be read from
+  //! camera factory data instead (Compact Pro).
+  std::string serial_number_;
+
 private:
   void extractFrame( const unsigned char *data, unsigned char *frame_data );
 
@@ -227,9 +243,14 @@ private:
 
   //! Pumps frames from the freshly-restarted device looking for the one-shot
   //! boot frames ft=4 (`FIRST_FRAME`) and ft=8 (`STARTUP_CALIBRATION_FRAME`),
-  //! using them to seed the drift anchor and host-side FFC reference. Returns
-  //! false if neither is observed within a small budget; `open()` retries by
-  //! re-running `setupCamera()`.
+  //! using them to seed the drift anchor and host-side FFC reference, and the
+  //! firmware temperature slope to seed the factory-default temperature
+  //! calibration (unless one is already installed). Returns false if ft=4/ft=8
+  //! are not both observed within a small budget; `open()` retries by re-running
+  //! `setupCamera()`. If the factory temperature anchor is unavailable (no valid
+  //! slope or factory reference), an identity mapping (`cK == raw counts`) is
+  //! installed instead so a temperature calibration is always present once this
+  //! returns true; it never throws for a missing anchor.
   bool tryConsumeStartupFrames();
 
   SeekDevice device_;
