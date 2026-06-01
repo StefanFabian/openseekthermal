@@ -195,8 +195,11 @@ protected:
   //!   1/T_K = 1/T_ref_K + (1/B) · ln((H − K)/(H_ref − K))
   //! where H_ref = factory_raw_at_T_ref_, T_ref_K = T_ref + 273.15.
   //!   K = H_ref − anchor[1].f[2] / T_ref  (factory page 0x20 rel-off 0x3C)
-  //!   B = anchor[2].f[1] / 4              (factory page 0x40 rel-off 0x28)
-  //! `factory_housing_valid_` indicates whether both anchors were read.
+  //!   B = factory float32 @ factory byte 0x58 (factory page 0x40 rel-off 0x18)
+  //! `factory_housing_valid_` indicates whether both anchors were read. NOTE:
+  //! the K decode places the curve knee inside the streaming operating band, so
+  //! computeHousingTemperature is only approximate; it is not used on the
+  //! default temperature path. See reverse_engineering/housing-ntc/.
   double factory_housing_K_ = 0.0;
   double factory_housing_B_ = 0.0;
   bool factory_housing_valid_ = false;

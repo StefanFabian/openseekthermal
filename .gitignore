@@ -2,5 +2,9 @@
 .vscode/
 cmake-build-*/
 build/
+captures/
+/tools/
+reverse_engineering/
+*_calib/
 *.pyc
 

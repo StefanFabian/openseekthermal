@@ -102,14 +102,12 @@ void SeekThermalNano300::setupCamera()
       if ( factory_T_ref_ > 0.0f )
         factory_housing_K_ = factory_raw_at_T_ref_ - anchor1_f2 / factory_T_ref_;
     }
-    // anchor[2] straddles the page boundary. Its f[1] (= 4·B_NTC) lives in the
-    // first half of the page at addr 0x40 at rel-offset 0x08 (= factory byte
-    // 0x48 logically, which is anchor[2].f[1] under the 32-byte-shift page
-    // overlap convention — see the comment above).
-    if ( addr == 0x40 && data.size() >= 0x0c ) {
-      float anchor2_f1;
-      std::memcpy( &anchor2_f1, data.data() + 0x08, sizeof( anchor2_f1 ) );
-      factory_housing_B_ = anchor2_f1 / 4.0f;
+    // Experimentally identified Beta-NTC coefficient B = factory float32 at
+    // factory byte 0x58 (page 0x40 rel-offset 0x18). Nano 3812 K / CP 3905 K
+    if ( addr == 0x40 && data.size() >= 0x1c ) {
+      float beta;
+      std::memcpy( &beta, data.data() + 0x18, sizeof( beta ) );
+      factory_housing_B_ = beta;
     }
   }
   if ( factory_raw_at_T_ref_ > 0.0 && factory_housing_K_ > 0.0 && factory_housing_B_ > 0.0 &&
