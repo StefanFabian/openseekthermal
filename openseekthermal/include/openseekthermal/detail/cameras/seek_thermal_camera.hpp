@@ -8,6 +8,7 @@
 #include "../frame.hpp"
 #include "../usb/seek_device.hpp"
 
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -104,9 +105,6 @@ public:
   /*!
    * Install a unified CameraCalibration. Replaces any previously installed
    * sections. Temperature, vignette and dead-pixel sections are each optional.
-   * A temperature section overrides the factory two-point anchor seeded at
-   * open(); omitting it keeps the currently active temperature mapping (the
-   * factory anchor unless a previous call set one).
    *
    * The in-band substrate-drift compensation (see
    * `setDriftCompensationEnabled`) runs on the raw counts regardless of
@@ -131,14 +129,6 @@ public:
   void setShutterCorrectionEnabled( bool enabled );
 
   bool isShutterCorrectionEnabled() const { return shutter_correction_enabled_; }
-
-  //! Compute housing temperature in °C from the per-frame `housing_adc`
-  //! (frame header byte 10) using the factory-stored Beta-NTC anchors. Returns
-  //! NaN when the factory anchors weren't read (e.g. older code paths or
-  //! truncated dumps). Read-only — no side effects on streaming.
-  double computeHousingTemperature( uint16_t housing_adc ) const noexcept;
-
-  bool hasFactoryHousingNtc() const noexcept { return factory_housing_valid_; }
 
   //! Raw mean of the most recent shutter (ft=1) frame, in sensor counts.
   //! Returns 0 before the first shutter event.
@@ -184,6 +174,15 @@ public:
   //! pad-column count). 0 disables the intra-session drift term.
   double getDriftCompensationCoefficient() const noexcept { return substrate_drift_coefficient_; }
 
+  //! Active in-band drift reference anchor. A fitted
+  //! absolute c0 is implicitly anchored to this value; persist it as
+  //! `TemperatureCalibration::pad_ref` so the c0 stays valid across reboots
+  //! (see setCalibration()).
+  double getDriftReferenceAnchor() const noexcept
+  {
+    return drift_anchor_set_ ? drift_reference_anchor_ : std::numeric_limits<double>::quiet_NaN();
+  }
+
 protected:
   bool write( SeekDeviceCommand command, const std::vector<unsigned char> &data );
 
@@ -193,27 +192,11 @@ protected:
 
   virtual void setupCamera() = 0;
 
-  //! Per-product anchor read from factory page 0x40 by per-device setupCamera()
-  //! implementations.
-  //!   raw_at_T_ref @ rel offset 0x04 (f32 LE)
-  //!   T_ref        @ rel offset 0x0c (f32 LE, universal 22.0 °C)
-  double factory_raw_at_T_ref_ = 0.0;
+  //! Per-product anchor read from factory page 0x20/0x40 by per-device
+  //! setupCamera() implementations.
+  //!   T_ref        @ rel offset 0x2c (f32 LE, universal 22.0 °C)
+  //!     shutter frame reference temperature, used as the camera-only c0 anchor
   double factory_T_ref_ = 0.0;
-
-  //! Beta-NTC housing thermometer constants, derived from factory anchors
-  //! when read by setupCamera(). The housing temperature in °C for a given
-  //! `housing_adc` (frame header byte 10) is then
-  //!   1/T_K = 1/T_ref_K + (1/B) · ln((H − K)/(H_ref − K))
-  //! where H_ref = factory_raw_at_T_ref_, T_ref_K = T_ref + 273.15.
-  //!   K = H_ref − anchor[1].f[2] / T_ref  (factory page 0x20 rel-off 0x3C)
-  //!   B = factory float32 @ factory byte 0x58 (factory page 0x40 rel-off 0x18)
-  //! `factory_housing_valid_` indicates whether both anchors were read. NOTE:
-  //! the K decode places the curve knee inside the streaming operating band, so
-  //! computeHousingTemperature is only approximate; it is not used on the
-  //! default temperature path. See reverse_engineering/housing-ntc/.
-  double factory_housing_K_ = 0.0;
-  double factory_housing_B_ = 0.0;
-  bool factory_housing_valid_ = false;
 
   //! Per-product substrate-drift slope `K_pad`. Pad-column `getFrameWidth()`
   //! (one past the visible image) acts as a per-frame substrate-temperature
@@ -241,16 +224,16 @@ private:
   //! warning and leaves state untouched if no valid pixels are present.
   void applyShutterReference( const uint16_t *extracted_shutter, size_t pixel_count );
 
-  //! Pumps frames from the freshly-restarted device looking for the one-shot
-  //! boot frames ft=4 (`FIRST_FRAME`) and ft=8 (`STARTUP_CALIBRATION_FRAME`),
-  //! using them to seed the drift anchor and host-side FFC reference, and the
-  //! firmware temperature slope to seed the factory-default temperature
-  //! calibration (unless one is already installed). Returns false if ft=4/ft=8
-  //! are not both observed within a small budget; `open()` retries by re-running
-  //! `setupCamera()`. If the factory temperature anchor is unavailable (no valid
-  //! slope or factory reference), an identity mapping (`cK == raw counts`) is
-  //! installed instead so a temperature calibration is always present once this
-  //! returns true; it never throws for a missing anchor.
+  //! Recompute the absolute temperature offset c0 from a shutter frame:
+  //!   c0 = factory_T_ref_ - c1 * (shutter_mean - K*(shutter_pad - pad_ref))
+  //! where K = substrate_drift_coefficient_ and pad_ref = drift_reference_anchor_.
+  //! Called at boot (first shutter) and every subsequent shutter cycle. No-op
+  //! until the drift anchor and firmware slope are available; the caller skips it
+  //! once a host temperature calibration owns c0 (c0_source_ != CameraAuto).
+  void updateTemperatureCalibration( double shutter_mean, double shutter_pad );
+
+  //! Pumps frames from the freshly-restarted device through the one-shot boot
+  //! sequence, using them to seed temperature mapping and drift compensation anchors.
   bool tryConsumeStartupFrames();
 
   SeekDevice device_;
@@ -270,11 +253,27 @@ private:
   bool own_usb_context_ = false;
 
   //! In-band drift-compensation per-session state. Captured during open() from
-  //! the startup ft=4 transfer's first padding column; cleared on close().
+  //! the FIRST real thermal (ft=3) transfer's pad column, which reflects this
+  //! boot's live substrate state; cleared on close().
   //! Toggling `drift_compensation_enabled_` does not touch the anchor.
   bool drift_compensation_enabled_ = true;
   bool drift_anchor_set_ = false;
   double drift_reference_anchor_ = 0.0;
+
+  //! Provenance of the absolute offset c0. Drives whether the startup sequence
+  //! and shutter cycles maintain c0:
+  //!   Firmware   - firmware-seeded slope with c0 = 0; no absolute anchor is
+  //!                available (no factory T_ref, no drift coefficient, or the
+  //!                boot shutter pad was unusable). Identity-like mapping.
+  //!   CameraAuto - maintained from the camera-only shutter blackbody anchor,
+  //!                seeded at boot and re-anchored every shutter cycle.
+  //!   Host       - a host temperature calibration installed via setCalibration()
+  //!                owns c0/c1; the startup sequence must not seed or re-anchor
+  //!                the camera-only c0 over it.
+  //! Host persists across close()/open() so a calibration installed before
+  //! open() — or kept across a reopen — is not discarded by the boot c0 seeding.
+  enum class C0Source { Firmware, CameraAuto, Host };
+  C0Source c0_source_ = C0Source::Firmware;
 };
 } // namespace openseekthermal
 

@@ -281,6 +281,17 @@ void doDeadPixels( SeekThermalCamera &cam, const SeekDevice &device, CameraCalib
 }
 
 // ---------------------------------------------------------------------------
+// Pin the drift anchor the fitted c0 was measured against onto the calibration,
+// so the frozen absolute offset stays valid across reboots (setCalibration re-
+// pins it instead of taking the per-boot first-thermal anchor). Only meaningful
+// when drift compensation contributed to the live measurement; otherwise c0 is
+// anchor-independent and pad_ref is left unset (NaN).
+void pinDriftAnchor( const SeekThermalCamera &cam, TemperatureCalibration &t )
+{
+  if ( cam.isDriftCompensationEnabled() && cam.getDriftCompensationCoefficient() > 0.0 )
+    t.pad_ref = cam.getDriftReferenceAnchor();
+}
+
 // [3a] Temperature: c0-only offset against a surface of known temperature
 
 void doKnownTemperature( SeekThermalCamera &cam, CameraCalibration &cal, int width, int height,
@@ -351,7 +362,8 @@ void doKnownTemperature( SeekThermalCamera &cam, CameraCalibration &cal, int wid
       std::cout << "Capture grab failed: " << to_string( res ) << "\n";
       return;
     }
-    if ( header.getFrameType() == FrameType::CALIBRATION_FRAME ) {
+    // Skip non-thermal frames
+    if ( header.getFrameType() != FrameType::THERMAL_FRAME ) {
       delete[] buf;
       continue;
     }
@@ -393,6 +405,7 @@ void doKnownTemperature( SeekThermalCamera &cam, CameraCalibration &cal, int wid
   TemperatureCalibration t;
   t.c0 = new_c0;
   t.c1 = c1;
+  pinDriftAnchor( cam, t );
   cal.temperature = t;
   dirty = true;
 
@@ -440,6 +453,7 @@ void doManualOffset( SeekThermalCamera &cam, CameraCalibration &cal, bool &dirty
   TemperatureCalibration t;
   t.c0 = c0_start + offset;
   t.c1 = c1;
+  pinDriftAnchor( cam, t );
   cal.temperature = t;
   dirty = true;
 

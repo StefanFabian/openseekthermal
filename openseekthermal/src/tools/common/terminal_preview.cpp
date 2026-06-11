@@ -4,6 +4,7 @@
 #include "terminal_preview.hpp"
 
 #include <algorithm>
+#include <csignal>
 #include <istream>
 #include <limits>
 #include <ostream>
@@ -17,7 +18,37 @@ namespace openseekthermal::tools
 namespace
 {
 constexpr const char *kHalfBlock = "\xe2\x96\x80"; // U+2580 UPPER HALF BLOCK
+
+// Signal-safe TTY restore: when a TerminalRawMode is active the process sits in
+// raw mode (no echo / no line editing). A signal that terminates the process
+// (Ctrl+C -> SIGINT, SIGTERM) skips the destructor, so without this the shell is
+// left broken. The handler restores the saved mode, then re-raises through the
+// previous handler so normal termination semantics are preserved. tcsetattr and
+// write are async-signal-safe; the globals are touched only here and in ctor/dtor
+// (no nesting: previews are sequential, single-threaded).
+termios g_saved_termios{};
+volatile std::sig_atomic_t g_raw_active = 0;
+
+struct sigaction g_prev_sigint {
+};
+
+struct sigaction g_prev_sigterm {
+};
+
+extern "C" void restoreTtyOnSignal( int sig )
+{
+  if ( g_raw_active ) {
+    tcsetattr( STDIN_FILENO, TCSANOW, &g_saved_termios );
+    const char reset[] = "\033[0m\n"; // drop any pending color, move off the preview
+    const ssize_t n = write( STDOUT_FILENO, reset, sizeof( reset ) - 1 );
+    (void)n;
+    g_raw_active = 0;
+  }
+  struct sigaction *prev = ( sig == SIGINT ) ? &g_prev_sigint : &g_prev_sigterm;
+  sigaction( sig, prev, nullptr );
+  raise( sig );
 }
+} // namespace
 
 bool isInteractiveTerminal() { return isatty( STDIN_FILENO ) != 0 && isatty( STDOUT_FILENO ) != 0; }
 
@@ -31,14 +62,32 @@ TerminalRawMode::TerminalRawMode()
   raw.c_lflag &= static_cast<tcflag_t>( ~( ICANON | ECHO ) );
   raw.c_cc[VMIN] = 0; // non-blocking reads
   raw.c_cc[VTIME] = 0;
-  if ( tcsetattr( STDIN_FILENO, TCSANOW, &raw ) == 0 )
-    active_ = true;
+  if ( tcsetattr( STDIN_FILENO, TCSANOW, &raw ) != 0 )
+    return;
+  active_ = true;
+
+  // Arm the signal-safe restore for the lifetime of this raw mode.
+  g_saved_termios = saved_;
+  g_raw_active = 1;
+
+  struct sigaction sa {
+  };
+
+  sa.sa_handler = restoreTtyOnSignal;
+  sigemptyset( &sa.sa_mask );
+  sa.sa_flags = 0;
+  sigaction( SIGINT, &sa, &g_prev_sigint );
+  sigaction( SIGTERM, &sa, &g_prev_sigterm );
 }
 
 TerminalRawMode::~TerminalRawMode()
 {
-  if ( active_ )
-    tcsetattr( STDIN_FILENO, TCSANOW, &saved_ );
+  if ( !active_ )
+    return;
+  tcsetattr( STDIN_FILENO, TCSANOW, &saved_ );
+  g_raw_active = 0;
+  sigaction( SIGINT, &g_prev_sigint, nullptr );
+  sigaction( SIGTERM, &g_prev_sigterm, nullptr );
 }
 
 void renderFrameAnsi( std::ostream &os, const uint16_t *pixels, int width, int height,
@@ -136,7 +185,12 @@ bool livePreviewUntilStart( SeekThermalCamera &cam, std::istream &in, std::ostre
     size_t buf_size = 0;
     FrameHeader header;
     const GrabFrameResult res = cam.grabFrame( &buf, buf_size, &header );
-    if ( res == GrabFrameResult::SUCCESS ) {
+    // Only thermal frames carry a scene image. Shutter/calibration and boot
+    // static frames (e.g. the ft=14 row bitmap) are interleaved into the stream;
+    // their all-0/0xFFFF rows mask to black here and show up as black bars, so
+    // skip them and keep showing the last good thermal frame. Input is still
+    // polled below every iteration, so Enter/q stay responsive meanwhile.
+    if ( res == GrabFrameResult::SUCCESS && header.getFrameType() == FrameType::THERMAL_FRAME ) {
       const auto *px = reinterpret_cast<const uint16_t *>( buf );
       renderFrameAnsi( os, px, cam.getFrameWidth(), cam.getFrameHeight(), cam.getFrameWidth(), 48,
                        status, true );

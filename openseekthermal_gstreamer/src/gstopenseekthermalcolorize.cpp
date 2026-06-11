@@ -478,7 +478,11 @@ static GstFlowReturn gst_openseekthermalcolorize_transform_frame( GstVideoFilter
   guint auto_min_raw = raw_min;
   guint auto_max_raw = raw_max;
   if ( self->min_centikelvin < 0 || self->max_centikelvin < 0 ) {
+    // Lock against a concurrent set_property(auto-range-frames) realloc of the
+    // rolling-window buffers.
+    GST_OBJECT_LOCK( self );
     push_and_get_stable_range( self, raw_min, raw_max, &auto_min_raw, &auto_max_raw );
+    GST_OBJECT_UNLOCK( self );
   }
   /* User-set bounds are in cK; map them into raw units once. */
   guint raw_lo = ( self->min_centikelvin >= 0 ) ? cK_to_raw( self->min_centikelvin, scale, offset )
@@ -628,11 +632,16 @@ static void gst_openseekthermalcolorize_set_property( GObject *object, guint pro
     self->roi_height = g_value_get_uint( value );
     break;
   case PROP_AUTO_RANGE_FRAMES:
+    // Reallocs the rolling-window buffers that transform_frame reads on the
+    // streaming thread; hold the object lock so a live property change can't
+    // free them mid-read.
+    GST_OBJECT_LOCK( self );
     self->auto_range_frames =
         std::clamp<guint>( g_value_get_uint( value ), 1u, MAX_AUTO_RANGE_FRAMES );
     resize_value_buffers( self, self->auto_range_frames );
     self->index = 0;
     self->first_frame = TRUE;
+    GST_OBJECT_UNLOCK( self );
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID( object, prop_id, pspec );

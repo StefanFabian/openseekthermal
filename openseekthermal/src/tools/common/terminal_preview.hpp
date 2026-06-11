@@ -24,6 +24,10 @@ bool isInteractiveTerminal();
 
 //! RAII: switch stdin to non-canonical, no-echo, non-blocking reads while alive
 //! (no-op when stdin is not a TTY); restores the previous mode on destruction.
+//! While active it also installs SIGINT/SIGTERM handlers that restore the saved
+//! terminal mode before re-raising, so Ctrl+C during a live preview leaves the
+//! shell usable instead of stuck in raw mode (the destructor never runs on a
+//! signal-terminated process).
 class TerminalRawMode
 {
 public:

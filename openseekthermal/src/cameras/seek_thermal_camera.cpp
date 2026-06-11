@@ -41,18 +41,20 @@ void SeekThermalCamera::open()
   openDevice();
   try {
     // setupCamera() ends with SET_OPERATION_MODE=1, after which the camera
-    // emits a deterministic boot sequence whose ft=4 + ft=8 are needed to
-    // seed drift / FFC state. If the device drops one of them we restart
-    // streaming (setupCamera begins with SET_OPERATION_MODE=0) and retry.
+    // emits a deterministic boot sequence. tryConsumeStartupFrames() needs the
+    // ft=8 startup shutter and the first ft=3 thermal frame to seed FFC / drift
+    // state. If the device drops one of them we restart streaming (setupCamera
+    // begins with SET_OPERATION_MODE=0) and retry.
     constexpr int kSetupAttempts = 5;
     for ( int attempt = 0; attempt < kSetupAttempts; ++attempt ) {
       setupCamera();
       if ( tryConsumeStartupFrames() )
         return;
-      LOG_WARN( "Did not observe ft=4 + ft=8 in startup frame budget on attempt "
+      LOG_WARN( "Did not observe ft=8 + first ft=3 in startup frame budget on attempt "
                 << ( attempt + 1 ) << "/" << kSetupAttempts << "; restarting camera." );
     }
-    throw SeekSetupError( "Camera did not emit ft=4 + ft=8 startup frames after 3 attempts" );
+    throw SeekSetupError( "Camera did not emit ft=8 + first ft=3 startup frames after " +
+                          std::to_string( kSetupAttempts ) + " attempts" );
   } catch ( const std::exception & ) {
     // Clean up device before throwing.
     close();
@@ -331,6 +333,9 @@ GrabFrameResult SeekThermalCamera::grabRawCountsFrame( unsigned char **image_dat
     std::vector<uint16_t> shutter( pixel_count );
     extractFrame( buffer_.data() + header_size, reinterpret_cast<unsigned char *>( shutter.data() ) );
     applyShutterReference( shutter.data(), pixel_count );
+    if ( c0_source_ == C0Source::CameraAuto )
+      updateTemperatureCalibration( last_shutter_mean_,
+                                    computePadDriftSignal( buffer_.data(), buffer_size ) );
   }
 
   if ( image_data == nullptr )
@@ -456,17 +461,17 @@ void SeekThermalCamera::applyShutterReference( const uint16_t *shutter, size_t p
 bool SeekThermalCamera::tryConsumeStartupFrames()
 {
   // Boot order is `4, 9, 14, 25, 26, 27, 28, 8, 7` then the first normal
-  // shutter cycle (see FRAME-TYPES.md). The budget covers the boot tail plus
-  // one full shutter cycle so a stray transfer error doesn't immediately
-  // force a setupCamera() retry.
-  constexpr int kBudget = 20;
+  // shutter cycle (ft=6/1/20) and the first ft=3 thermal (see FRAME-TYPES.md).
+  // The budget covers the boot tail plus that shutter cycle and first thermal so
+  // a stray transfer error doesn't immediately force a setupCamera() retry.
+  constexpr int kBudget = 24;
   const size_t pixel_count =
       static_cast<size_t>( getFrameWidth() ) * static_cast<size_t>( getFrameHeight() );
   const int header_size = device_._getFrameHeaderSize();
   std::vector<unsigned char> transfer( device_._getFrameTransferTotalSize() );
   std::vector<uint16_t> extracted( pixel_count );
-  bool ft4_seen = false;
   bool ft8_seen = false;
+  double boot_shutter_pad = 0.0;
   for ( int i = 0; i < kBudget; ++i ) {
     unsigned char *buf = transfer.data();
     size_t buf_size = transfer.size();
@@ -479,38 +484,60 @@ bool SeekThermalCamera::tryConsumeStartupFrames()
             transfer.begin() +
                 std::min<size_t>( buf_size, FrameHeader::GetMinHeaderSize( device_.type ) ) ) );
     const FrameType ft = header.getFrameType();
-    // Seed the factory two-point temperature mapping from the per-unit firmware
-    // slope (row 1 byte 16, present in every transfer) unless one is already
-    // installed, so the driver has a valid mapping for the whole session.
+    // Seed the per-unit firmware SLOPE c1 = 100 / counts (row 1 byte 16, present
+    // in every transfer) unless one is already installed. The absolute offset c0
+    // is filled in once the boot shutter (ft=8) and drift anchor (first ft=3) are
+    // both known (below); until then it stays 0.
     if ( !calibration_.temperature ) {
       const uint16_t counts = header.getCountsPer100Celsius();
-      if ( counts != 0 && factory_raw_at_T_ref_ > 0.0 && factory_T_ref_ > 0.0 ) {
+      if ( counts != 0 ) {
         TemperatureCalibration t;
         t.c1 = 100.0 / static_cast<double>( counts );
-        t.c0 = factory_T_ref_ - t.c1 * factory_raw_at_T_ref_;
+        t.c0 = 0.0;
         calibration_.temperature = t;
       }
     }
-    if ( !ft4_seen && ft == FrameType::FIRST_FRAME ) {
-      const double pad = computePadDriftSignal( transfer.data(), buf_size );
-      if ( pad > 0.0 ) {
-        drift_reference_anchor_ = pad;
-        drift_anchor_set_ = true;
-        ft4_seen = true;
-        LOG_DEBUG( "[drift] startup reference set from FIRST_FRAME: pad=" << drift_reference_anchor_ );
-      }
-    } else if ( !ft8_seen && ft == FrameType::STARTUP_CALIBRATION_FRAME ) {
+    if ( !ft8_seen && ft == FrameType::STARTUP_CALIBRATION_FRAME ) {
       extractFrame( transfer.data() + header_size,
                     reinterpret_cast<unsigned char *>( extracted.data() ) );
       applyShutterReference( extracted.data(), pixel_count );
       ft8_seen = shutter_offset_.size() == pixel_count;
       if ( ft8_seen ) {
-        LOG_DEBUG( "[ffc] startup shutter reference captured (mean=" << last_shutter_mean_ << ")" );
+        boot_shutter_pad = computePadDriftSignal( transfer.data(), buf_size );
+        LOG_DEBUG( "[ffc] startup shutter reference captured (mean="
+                   << last_shutter_mean_ << " pad=" << boot_shutter_pad << ")" );
+      }
+    } else if ( !drift_anchor_set_ && ft == FrameType::THERMAL_FRAME ) {
+      // Anchor in-band drift compensation to the FIRST real thermal pad column,
+      // which reflects this boot's live substrate state (not the stored ft=4
+      // shading map, whose pad does not track the boot substrate).
+      const double pad = computePadDriftSignal( transfer.data(), buf_size );
+      if ( pad > 0.0 ) {
+        drift_reference_anchor_ = pad;
+        drift_anchor_set_ = true;
+        LOG_DEBUG( "[drift] startup reference set from first THERMAL_FRAME: pad="
+                   << drift_reference_anchor_ );
+        // Seed the camera-only absolute offset c0 from the boot shutter blade as
+        // a blackbody at the factory reference temperature, drift-normalized to
+        // this boot's substrate state:
+        //   c0 = factory_T_ref_ - c1*(shutter_mean - K*(shutter_pad - pad_ref))
+        // The factory characterizes the unit at T_ref (factory page 0x20); the
+        // drift comp removes the boot substrate state, so the live housing NTC --
+        // unreliable when the camera boots warm -- is not needed. Re-anchored at
+        // every later shutter in grabRawCountsFrame.
+        // Skipped when a host temperature calibration is provided.
+        if ( factory_T_ref_ > 0.0 && calibration_.temperature && c0_source_ != C0Source::Host &&
+             substrate_drift_coefficient_ > 0.0 && boot_shutter_pad > 0.0 ) {
+          c0_source_ = C0Source::CameraAuto;
+          updateTemperatureCalibration( last_shutter_mean_, boot_shutter_pad );
+          LOG_DEBUG( "[c0] camera-only offset c0=" << calibration_.temperature->c0
+                                                   << " (T_ref=" << factory_T_ref_ << ")" );
+        }
       }
     }
-    if ( ft4_seen && ft8_seen ) {
+    if ( ft8_seen && drift_anchor_set_ ) {
       if ( !calibration_.temperature ) {
-        // If none could be found, cancel it out so it's just the counts.
+        // If no slope could be found, install identity (cK == raw counts).
         calibration_.temperature = TemperatureCalibration{ -273.15, 0.01 };
       }
       return true;
@@ -584,28 +611,39 @@ void SeekThermalCamera::setCalibration( CameraCalibration cal )
   }
   std::lock_guard buffer_lock( buffer_mutex_ );
   // Keep the active temperature mapping (factory default from open(), or a
-  // previously installed one) when the incoming calibration omits it.
-  if ( !cal.temperature )
+  // previously installed one) when the incoming calibration omits it. A host
+  // temperature section takes ownership of c0 and stops the per-shutter
+  // camera-only re-anchoring.
+  if ( cal.temperature ) {
+    // Host owns c0/c1 so a later open()/reopen() does not seed the camera-only
+    // c0 over it (the calibration may be installed before open()).
+    c0_source_ = C0Source::Host;
+    // Pin the in-band drift anchor to the reference this c0 was fit against so
+    // the fixed offset stays valid across reboots; otherwise the per-boot
+    // first-thermal anchor (set in tryConsumeStartupFrames) would shift it by
+    // c1*K*(boot_pad - fit_pad). Unset pad_ref keeps that per-boot anchor.
+    if ( !std::isnan( cal.temperature->pad_ref ) ) {
+      drift_reference_anchor_ = cal.temperature->pad_ref;
+      drift_anchor_set_ = true;
+    }
+  } else {
     cal.temperature = calibration_.temperature;
+  }
   calibration_ = std::move( cal );
 }
 
-double SeekThermalCamera::computeHousingTemperature( uint16_t housing_adc ) const noexcept
+void SeekThermalCamera::updateTemperatureCalibration( double shutter_mean, double shutter_pad )
 {
-  if ( !factory_housing_valid_ )
-    return std::numeric_limits<double>::quiet_NaN();
-  const double H = static_cast<double>( housing_adc );
-  const double H_ref = factory_raw_at_T_ref_;
-  const double num = H - factory_housing_K_;
-  const double den = H_ref - factory_housing_K_;
-  // Out-of-domain: H crossed the divider offset (extreme cold). Caller sees NaN.
-  if ( den == 0.0 || num <= 0.0 || den <= 0.0 )
-    return std::numeric_limits<double>::quiet_NaN();
-  const double inv_T_ref_K = 1.0 / ( factory_T_ref_ + 273.15 );
-  const double inv_T_K = inv_T_ref_K + std::log( num / den ) / factory_housing_B_;
-  if ( inv_T_K <= 0.0 )
-    return std::numeric_limits<double>::quiet_NaN();
-  return 1.0 / inv_T_K - 273.15;
+  // c0 = factory_T_ref_ - c1 * (shutter_mean drift-normalized to the boot pad
+  // reference). The shutter blade is a blackbody at the factory reference
+  // temperature once the boot substrate state is removed. See
+  // tryConsumeStartupFrames for the rationale.
+  if ( factory_T_ref_ <= 0.0 || !calibration_.temperature || substrate_drift_coefficient_ <= 0.0 ||
+       !drift_anchor_set_ || shutter_pad <= 0.0 )
+    return;
+  const double dc_shutter =
+      shutter_mean - substrate_drift_coefficient_ * ( shutter_pad - drift_reference_anchor_ );
+  calibration_.temperature->c0 = factory_T_ref_ - calibration_.temperature->c1 * dc_shutter;
 }
 
 std::string SeekThermalCamera::readChipID()

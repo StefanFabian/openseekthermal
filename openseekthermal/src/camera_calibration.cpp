@@ -5,8 +5,10 @@
 
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <locale>
 #include <sstream>
 #include <stdexcept>
@@ -153,11 +155,15 @@ double optionalDouble( const Section &sec, const std::string &key, double defaul
   return v;
 }
 
-TemperatureCalibration parseTemperatureSection( const Section &sec )
+TemperatureCalibration parseTemperatureSection( const Section &sec, const std::string &path )
 {
   TemperatureCalibration cal;
-  cal.c0 = optionalDouble( sec, "c0", 0.0 );
-  cal.c1 = optionalDouble( sec, "c1", 0.0 );
+  // Both coefficients are mandatory: a [temperature] section is a complete
+  // two-point fit. A defaulted c1 (= 0) would silently map every pixel to the
+  // same cK; a defaulted c0 would shift the whole scene by an arbitrary amount.
+  cal.c0 = requireDouble( sec, "temperature", "c0", path );
+  cal.c1 = requireDouble( sec, "temperature", "c1", path );
+  cal.pad_ref = requireDouble( sec, "temperature", "pad_ref", path );
   return cal;
 }
 
@@ -233,6 +239,11 @@ void writeTemperatureSection( std::ostream &out, const TemperatureCalibration &c
   out << std::scientific << std::setprecision( 10 );
   out << "c0 = " << cal.c0 << "\n";
   out << "c1 = " << cal.c1 << "\n";
+  // Pad-column drift reference the c0 was fit against; the driver pins its
+  // in-band drift anchor to it for reboot-stable absolute temperatures. Omitted
+  // when unset (camera-only auto-c0 fits, where the anchor cancels).
+  if ( !std::isnan( cal.pad_ref ) )
+    out << "pad_ref = " << cal.pad_ref << "\n";
   out << std::defaultfloat;
 }
 
@@ -258,17 +269,14 @@ void writeDeadPixelsSection( std::ostream &out, const DeadPixelMask &mask )
     out << "pixels =\n";
     return;
   }
+  // All pairs on a single line: parseFile() is line-based and rejects
+  // continuation lines (no '='), so wrapping would break the load round-trip.
   out << "pixels =";
   const int w = mask.width();
-  size_t per_line = 0;
   for ( const auto &entry : mask.entries() ) {
     const int x = static_cast<int>( entry.index ) % w;
     const int y = static_cast<int>( entry.index ) / w;
     out << " " << x << "," << y;
-    if ( ++per_line == 16 ) {
-      out << "\n        ";
-      per_line = 0;
-    }
   }
   out << "\n";
 }
@@ -286,7 +294,7 @@ CameraCalibration loadCameraCalibration( const std::filesystem::path &path, int 
   ParsedFile parsed = parseFile( in, path_str );
   CameraCalibration cal;
   if ( auto it = parsed.sections.find( "temperature" ); it != parsed.sections.end() ) {
-    cal.temperature = parseTemperatureSection( it->second );
+    cal.temperature = parseTemperatureSection( it->second, path_str );
   }
   if ( auto it = parsed.sections.find( "vignette" ); it != parsed.sections.end() ) {
     cal.vignette = parseVignetteSection( it->second, path_str, expected_width, expected_height );

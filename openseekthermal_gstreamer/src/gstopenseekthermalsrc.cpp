@@ -179,7 +179,7 @@ void resize_value_buffers( GstOpenSeekThermalSrc *ostsrc, guint new_size )
 static void gst_openseekthermalsrc_init( GstOpenSeekThermalSrc *ostsrc )
 {
   ostsrc->skip_invalid_frames = TRUE;
-  ostsrc->normalize = TRUE;
+  ostsrc->normalize = FALSE;
   ostsrc->normalize_frame_count = 8;
 
   ostsrc->serial = g_strdup( "" );
@@ -253,8 +253,12 @@ static void gst_openseekthermalsrc_set_property( GObject *object, guint prop_id,
                           "Normalize frame count can't be larger than 16383. Setting to 16383." );
       ostsrc->normalize_frame_count = 16383;
     }
+    // Reallocs the rolling-window buffers read by create() on the streaming
+    // thread; hold the object lock so a live change can't free them mid-read.
+    GST_OBJECT_LOCK( ostsrc );
     resize_value_buffers( ostsrc, ostsrc->normalize_frame_count );
     ostsrc->index = 0;
+    GST_OBJECT_UNLOCK( ostsrc );
     break;
   case PROP_CALIBRATION:
     g_free( ostsrc->calibration_path );
@@ -482,7 +486,11 @@ static GstFlowReturn gst_openseekthermalsrc_create( GstPushSrc *src, GstBuffer *
       min_value = std::min( min_value, value );
       max_value = std::max( max_value, value );
     }
+    // Lock against a concurrent set_property(normalize-frame-count) realloc of
+    // the rolling-window buffers.
+    GST_OBJECT_LOCK( ostsrc );
     update_normalization_factor( ostsrc, min_value, max_value, scale, offset );
+    GST_OBJECT_UNLOCK( ostsrc );
     GST_DEBUG_OBJECT( ostsrc, "Normalization: scale=%f, offset=%f", scale, offset );
 
     auto *data = reinterpret_cast<uint16_t *>( map.data );

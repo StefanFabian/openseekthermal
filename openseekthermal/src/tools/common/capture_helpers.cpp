@@ -120,7 +120,8 @@ bool accumulateAverage( SeekThermalCamera &cam, int width, int height, int frame
       err = "Capture grab failed: " + to_string( res );
       return false;
     }
-    if ( header.getFrameType() == FrameType::CALIBRATION_FRAME ) {
+    // Skip non-thermal frames
+    if ( header.getFrameType() != FrameType::THERMAL_FRAME ) {
       ++skipped_cal;
       delete[] buf;
       continue;

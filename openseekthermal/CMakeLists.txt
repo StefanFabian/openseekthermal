@@ -56,14 +56,12 @@ if (BUILD_EXAMPLES)
 endif ()
 
 if (BUILD_TOOLS)
-  add_executable(calibrate_vignette src/tools/calibrate_vignette.cpp)
-  target_link_libraries(calibrate_vignette openseekthermal)
-
-  add_executable(calibrate_dead_pixels src/tools/calibrate_dead_pixels.cpp)
-  target_link_libraries(calibrate_dead_pixels openseekthermal)
 
   add_executable(list_seek_devices src/tools/list_seek_devices.cpp)
   target_link_libraries(list_seek_devices openseekthermal)
+
+  add_executable(dump_camera_data src/tools/dump_camera_data.cpp)
+  target_link_libraries(dump_camera_data openseekthermal)
 
   add_executable(calibration_tool
     src/tools/calibration_tool.cpp
@@ -77,7 +75,7 @@ if (BUILD_TOOLS)
 
   if (ament_cmake_FOUND)
     install(
-      TARGETS list_seek_devices calibration_tool
+      TARGETS list_seek_devices dump_camera_data calibration_tool
       RUNTIME DESTINATION lib/${PROJECT_NAME}
     )
   endif ()

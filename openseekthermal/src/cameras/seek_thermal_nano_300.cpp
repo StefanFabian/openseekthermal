@@ -81,55 +81,26 @@ void SeekThermalNano300::setupCamera()
           "Failed to set factory settings features to 0x20 0x00 0x00 0x00 0x00 0x00!" );
     if ( data.resize( 64 ); !read( SeekDeviceCommand::GET_FACTORY_SETTINGS, data ) )
       throw SeekSetupError( "Failed to read factory settings features!" );
-    // Pages are 64 bytes on a 32-byte stride, but the overlapping first 32
-    // bytes of each non-initial page are inconsistent with the second half of
-    // the previous page (the camera returns different data for the same
-    // factory address depending on which page request was used). The
-    // factory anchor table (5 records × 4 f32) starts at factory byte 0x44:
-    //   anchor[0] = (raw_at_T_ref, ?, T_ref_C=22, count=3)
-    //   anchor[1] = (BB_T_C, BB_lnR, anchor1_f2, BB_emissivity_x100)
-    //   anchor[2] = (lnR_ref, 4·B_ntc, T_factory_K, ?)
-    // The housing-NTC Beta thermometer needs anchor[1].f[2] and anchor[2].f[1].
-    if ( addr == 0x20 && data.size() >= 0x40 ) {
+    // Factory page 0x20 holds the unit's reference temperature as a
+    // little-endian float32 at relative offset 0x2c (~22 °C on most units). It
+    // is the absolute-temperature anchor; the calibration frame is treated as a
+    // blackbody at this temperature.
+    if ( addr == 0x20 && data.size() >= 0x30 ) {
       float v;
-      std::memcpy( &v, data.data() + 0x24, sizeof( v ) );
-      factory_raw_at_T_ref_ = v;
       std::memcpy( &v, data.data() + 0x2c, sizeof( v ) );
       factory_T_ref_ = v;
-      // anchor[1].f[2] = factory byte 0x5c → rel-offset 0x3c in this page.
-      float anchor1_f2;
-      std::memcpy( &anchor1_f2, data.data() + 0x3c, sizeof( anchor1_f2 ) );
-      if ( factory_T_ref_ > 0.0f )
-        factory_housing_K_ = factory_raw_at_T_ref_ - anchor1_f2 / factory_T_ref_;
-    }
-    // Experimentally identified Beta-NTC coefficient B = factory float32 at
-    // factory byte 0x58 (page 0x40 rel-offset 0x18). Nano 3812 K / CP 3905 K
-    if ( addr == 0x40 && data.size() >= 0x1c ) {
-      float beta;
-      std::memcpy( &beta, data.data() + 0x18, sizeof( beta ) );
-      factory_housing_B_ = beta;
     }
   }
-  if ( factory_raw_at_T_ref_ > 0.0 && factory_housing_K_ > 0.0 && factory_housing_B_ > 0.0 &&
-       factory_housing_K_ < factory_raw_at_T_ref_ ) {
-    factory_housing_valid_ = true;
-  }
-  // Substrate-drift slope: scene-pixel raw counts per pad-column count for
-  // the in-band drift compensation. Empirically fit across Nano A streaming
-  // warmup (`livedrift_streamfit_20260526.csv`) and 60/80 °C cont-warmup
-  // captures — slope clusters at 1.15–1.27, K=1.15 keeps the residual
-  // envelope below 1.5 °C across the 15-min warmup at static scene.
-  substrate_drift_coefficient_ = 1.15;
-  LOG_DEBUG( "[housing-ntc] H_ref=" << factory_raw_at_T_ref_ << " T_ref=" << factory_T_ref_
-                                    << " K=" << factory_housing_K_ << " B=" << factory_housing_B_
-                                    << " valid=" << factory_housing_valid_ );
+  // Per-product substrate-drift slope: scene-pixel raw counts per pad-column
+  // count for the in-band drift compensation. See setDriftCompensationEnabled().
+  substrate_drift_coefficient_ = 1.24;
   if ( !write( SeekDeviceCommand::SET_FIRMWARE_INFO_FEATURES, { 0x15, 0x00 } ) )
     throw SeekSetupError( "Failed to set firmware info features to 0x15 0x00!" );
   if ( data.resize( 64 ); !read( SeekDeviceCommand::GET_FIRMWARE_INFO, data ) )
     throw SeekSetupError( "Failed to read firmware info!" );
   if ( data.resize( 4 ); !read( SeekDeviceCommand::GET_ERROR_CODE, data ) )
     throw SeekSetupError( "Failed to read error code!" );
-  if ( data[0] != 0x00 && data[1] != 0x00 && data[2] != 0x00 && data[3] != 0x00 )
+  if ( data[0] != 0x00 || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 )
     throw SeekSetupError( "Camera reported error code during setup: " + data_to_string( data ) );
   if ( !write( SeekDeviceCommand::TOGGLE_SHUTTER, { 0xFC, 0x00, 0x04, 0x00 } ) )
     throw SeekSetupError( "Failed to toggle shutter!" );
