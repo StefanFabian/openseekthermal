@@ -48,8 +48,8 @@ jobs:
             os: ubuntu-22.04
           - rosdistro: jazzy
             os: ubuntu-24.04
-          - rosdistro: rolling
-            os: ubuntu-latest
+          - rosdistro: lyrical
+            os: ubuntu-26.04
     steps:
       - name: install build tools
         run: |
