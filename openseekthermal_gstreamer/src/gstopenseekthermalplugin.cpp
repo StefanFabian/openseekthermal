@@ -6,12 +6,20 @@
 #endif
 
 #include <gst/gst.h>
+#include <openseekthermal_gstreamer/gstopenseekthermalcolorize.h>
 #include <openseekthermal_gstreamer/gstopenseekthermalsrc.h>
 
 static gboolean plugin_init( GstPlugin *plugin )
 {
-  return gst_element_register( plugin, "openseekthermalsrc", GST_RANK_NONE,
-                               GST_TYPE_OPENSEEKTHERMALSRC );
+  if ( !gst_element_register( plugin, "openseekthermalsrc", GST_RANK_NONE,
+                              GST_TYPE_OPENSEEKTHERMALSRC ) ) {
+    return FALSE;
+  }
+  if ( !gst_element_register( plugin, "openseekthermalcolorize", GST_RANK_NONE,
+                              GST_TYPE_OPENSEEKTHERMALCOLORIZE ) ) {
+    return FALSE;
+  }
+  return TRUE;
 }
 
 #ifndef VERSION

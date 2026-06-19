@@ -3,7 +3,11 @@
 
 #include "openseekthermal/detail//cameras/seek_thermal_compact_pro.hpp"
 #include "openseekthermal/detail/exceptions.hpp"
+#include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <cstring>
+#include <string>
 
 #include "../logging.hpp"
 
@@ -62,7 +66,31 @@ void SeekThermalCompactPro::setupCamera()
           "Failed to set factory settings features to 0x20 0x00 0x00 0x00 0x00 0x00!" );
     if ( data.resize( 64 ); !read( SeekDeviceCommand::GET_FACTORY_SETTINGS, data ) )
       throw SeekSetupError( "Failed to read factory settings features!" );
+    // The Compact Pro does not advertise a serial over USB. Factory page 0x00
+    // carries the 12-char ASCII unit serial at relative offset 0x10
+    // (null-padded), mirroring the Nano's USB serial format.
+    if ( addr == 0x00 && data.size() >= 0x10 ) {
+      std::string s( reinterpret_cast<const char *>( data.data() ) + 0x10,
+                     std::min<size_t>( 12, data.size() - 0x10 ) );
+      s.erase( std::find_if( s.begin(), s.end(),
+                             []( unsigned char c ) { return c == '\0' || std::isprint( c ) == 0; } ),
+               s.end() );
+      if ( !s.empty() )
+        serial_number_ = s;
+    }
+    // Factory page 0x20 holds the unit's reference temperature as a
+    // little-endian float32 at relative offset 0x2c (~22 °C on most units). It
+    // is the absolute-temperature anchor; the calibration frame is treated as a
+    // blackbody at this temperature.
+    if ( addr == 0x20 && data.size() >= 0x30 ) {
+      float v;
+      std::memcpy( &v, data.data() + 0x2c, sizeof( v ) );
+      factory_T_ref_ = v;
+    }
   }
+  // Per-product substrate-drift slope: scene-pixel raw counts per pad-column
+  // count for the in-band drift compensation. See setDriftCompensationEnabled().
+  substrate_drift_coefficient_ = 1.17;
 
   if ( !write( SeekDeviceCommand::SET_FIRMWARE_INFO_FEATURES, { 0x15, 0x00 } ) )
     throw SeekSetupError( "Failed to set firmware info features to 0x15 0x00!" );

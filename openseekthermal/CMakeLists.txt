@@ -26,6 +26,7 @@ add_library(openseekthermal SHARED
   src/cameras/seek_thermal_compact_pro.cpp
   src/cameras/seek_thermal_nano_300.cpp
   src/usb/seek_device.cpp
+  src/camera_calibration.cpp
   src/dead_pixel_mask.cpp
   src/vignette_correction.cpp
   src/exceptions.cpp
@@ -55,18 +56,26 @@ if (BUILD_EXAMPLES)
 endif ()
 
 if (BUILD_TOOLS)
-  add_executable(calibrate_vignette src/tools/calibrate_vignette.cpp)
-  target_link_libraries(calibrate_vignette openseekthermal)
-
-  add_executable(calibrate_dead_pixels src/tools/calibrate_dead_pixels.cpp)
-  target_link_libraries(calibrate_dead_pixels openseekthermal)
 
   add_executable(list_seek_devices src/tools/list_seek_devices.cpp)
   target_link_libraries(list_seek_devices openseekthermal)
 
+  add_executable(dump_camera_data src/tools/dump_camera_data.cpp)
+  target_link_libraries(dump_camera_data openseekthermal)
+
+  add_executable(calibration_tool
+    src/tools/calibration_tool.cpp
+    src/tools/common/fit_vignette.cpp
+    src/tools/common/detect_dead_pixels.cpp
+    src/tools/common/fit_temperature.cpp
+    src/tools/common/capture_helpers.cpp
+    src/tools/common/terminal_preview.cpp
+  )
+  target_link_libraries(calibration_tool openseekthermal)
+
   if (ament_cmake_FOUND)
     install(
-      TARGETS calibrate_vignette calibrate_dead_pixels list_seek_devices
+      TARGETS list_seek_devices dump_camera_data calibration_tool
       RUNTIME DESTINATION lib/${PROJECT_NAME}
     )
   endif ()
@@ -96,7 +105,7 @@ configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/openseekthermal-
 # Generate the version file for the config file
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/openseekthermal-config-version.cmake"
-  VERSION 1.0.0
+  VERSION 2.0.0
   COMPATIBILITY SameMajorVersion
 )
 

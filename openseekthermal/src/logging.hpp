@@ -13,6 +13,9 @@
 #define LOG_DEBUG( ... )                                                                           \
   do { /* nothing*/                                                                                \
   } while ( false )
+#define LOG_INFO( ... )                                                                            \
+  do { /* nothing*/                                                                                \
+  } while ( false )
 #define LOG_WARN( ... )                                                                            \
   do { /* nothing*/                                                                                \
   } while ( false )
@@ -30,6 +33,8 @@
   } while ( false )
 #endif
 
+#define LOG_INFO( ... )                                                                            \
+  std::cerr << "OpenSeekThermal - INFO: " << __VA_ARGS__ << std::endl << std::flush
 #define LOG_WARN( ... )                                                                            \
   std::cerr << "OpenSeekThermal - WARN: " << __VA_ARGS__ << std::endl << std::flush
 #define LOG_ERROR( ... )                                                                           \

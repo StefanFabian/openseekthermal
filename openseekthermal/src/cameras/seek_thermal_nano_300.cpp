@@ -4,6 +4,7 @@
 #include "openseekthermal/detail//cameras/seek_thermal_nano_300.hpp"
 #include "openseekthermal/detail/exceptions.hpp"
 #include <cassert>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 
@@ -80,14 +81,26 @@ void SeekThermalNano300::setupCamera()
           "Failed to set factory settings features to 0x20 0x00 0x00 0x00 0x00 0x00!" );
     if ( data.resize( 64 ); !read( SeekDeviceCommand::GET_FACTORY_SETTINGS, data ) )
       throw SeekSetupError( "Failed to read factory settings features!" );
+    // Factory page 0x20 holds the unit's reference temperature as a
+    // little-endian float32 at relative offset 0x2c (~22 °C on most units). It
+    // is the absolute-temperature anchor; the calibration frame is treated as a
+    // blackbody at this temperature.
+    if ( addr == 0x20 && data.size() >= 0x30 ) {
+      float v;
+      std::memcpy( &v, data.data() + 0x2c, sizeof( v ) );
+      factory_T_ref_ = v;
+    }
   }
+  // Per-product substrate-drift slope: scene-pixel raw counts per pad-column
+  // count for the in-band drift compensation. See setDriftCompensationEnabled().
+  substrate_drift_coefficient_ = 1.24;
   if ( !write( SeekDeviceCommand::SET_FIRMWARE_INFO_FEATURES, { 0x15, 0x00 } ) )
     throw SeekSetupError( "Failed to set firmware info features to 0x15 0x00!" );
   if ( data.resize( 64 ); !read( SeekDeviceCommand::GET_FIRMWARE_INFO, data ) )
     throw SeekSetupError( "Failed to read firmware info!" );
   if ( data.resize( 4 ); !read( SeekDeviceCommand::GET_ERROR_CODE, data ) )
     throw SeekSetupError( "Failed to read error code!" );
-  if ( data[0] != 0x00 && data[1] != 0x00 && data[2] != 0x00 && data[3] != 0x00 )
+  if ( data[0] != 0x00 || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 )
     throw SeekSetupError( "Camera reported error code during setup: " + data_to_string( data ) );
   if ( !write( SeekDeviceCommand::TOGGLE_SHUTTER, { 0xFC, 0x00, 0x04, 0x00 } ) )
     throw SeekSetupError( "Failed to toggle shutter!" );
