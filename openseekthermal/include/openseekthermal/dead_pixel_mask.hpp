@@ -4,6 +4,7 @@
 #ifndef OPENSEEKTHERMAL_DEAD_PIXEL_MASK_HPP
 #define OPENSEEKTHERMAL_DEAD_PIXEL_MASK_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
