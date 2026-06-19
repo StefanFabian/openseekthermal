@@ -143,18 +143,6 @@ int requireInt( const Section &sec, const std::string &section_name, const std::
   return v;
 }
 
-double optionalDouble( const Section &sec, const std::string &key, double default_value )
-{
-  auto it = sec.find( key );
-  if ( it == sec.end() )
-    return default_value;
-  double v;
-  if ( !parseDoubleC( it->second, v ) ) {
-    throw std::runtime_error( "Calibration value '" + key + "' = '" + it->second + "' invalid" );
-  }
-  return v;
-}
-
 TemperatureCalibration parseTemperatureSection( const Section &sec, const std::string &path )
 {
   TemperatureCalibration cal;
