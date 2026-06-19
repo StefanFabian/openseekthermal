@@ -26,6 +26,7 @@
 #ifndef OPENSEEKTHERMAL_TOOLS_DETECT_DEAD_PIXELS_HPP
 #define OPENSEEKTHERMAL_TOOLS_DETECT_DEAD_PIXELS_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
