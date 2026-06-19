@@ -29,11 +29,9 @@ constexpr const char *kHalfBlock = "\xe2\x96\x80"; // U+2580 UPPER HALF BLOCK
 termios g_saved_termios{};
 volatile std::sig_atomic_t g_raw_active = 0;
 
-struct sigaction g_prev_sigint {
-};
+struct sigaction g_prev_sigint{};
 
-struct sigaction g_prev_sigterm {
-};
+struct sigaction g_prev_sigterm{};
 
 extern "C" void restoreTtyOnSignal( int sig )
 {
@@ -70,8 +68,7 @@ TerminalRawMode::TerminalRawMode()
   g_saved_termios = saved_;
   g_raw_active = 1;
 
-  struct sigaction sa {
-  };
+  struct sigaction sa{};
 
   sa.sa_handler = restoreTtyOnSignal;
   sigemptyset( &sa.sa_mask );
