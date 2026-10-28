@@ -97,10 +97,9 @@ public:
 
   std::string readChipID();
 
-  //! Device serial number. For the Nano 300 this is the serial advertised over
-  //! USB; the Compact Pro does not advertise one, so its serial is read from
-  //! factory data during `setupCamera()`. Empty when unavailable.
-  const std::string &getSerialNumber() const noexcept { return serial_number_; }
+  //! Device serial number, read from USB or the camera's factory data.
+  //! Updated by open() from the matched device. Empty when unavailable.
+  const std::string &getSerialNumber() const noexcept { return device_.serial; }
 
   /*!
    * Install a unified CameraCalibration. Replaces any previously installed
@@ -204,11 +203,6 @@ protected:
   //! count (Nano 300 ≈ 1.15, Compact Pro ≈ 1.04). Set by the per-device
   //! `setupCamera()`; 0 disables the in-band drift compensation.
   double substrate_drift_coefficient_ = 0.0;
-
-  //! Device serial. Seeded from the USB-advertised serial in the constructor;
-  //! per-device `setupCamera()` overwrites it when the serial must be read from
-  //! camera factory data instead (Compact Pro).
-  std::string serial_number_;
 
 private:
   void extractFrame( const unsigned char *data, unsigned char *frame_data );

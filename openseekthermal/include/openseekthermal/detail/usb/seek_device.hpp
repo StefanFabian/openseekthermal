@@ -21,9 +21,9 @@ struct SeekDevice {
   };
 
   Type type = Type::None;
-  //! The serial number of the device. Not all series have one. If specified takes precedence over port.
-  //! Confirmed to have one: Nano 300
-  //! Confirmed not to have one: Compact, CompactPro, CompactPro FF
+  //! The serial number of the device. If specified takes precedence over port.
+  //! Read from USB or, if not advertised there, from the camera's factory data.
+  //! Empty if it could not be read, e.g., because the device is in use.
   std::string serial;
   //! The usb address of the device. This is the bus number and port number(s). If serial is specified this is ignored.
   //! Bus and port numbers are separated by hyphen. Port numbers are separated by dots.

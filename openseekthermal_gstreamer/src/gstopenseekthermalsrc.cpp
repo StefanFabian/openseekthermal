@@ -101,10 +101,8 @@ static void gst_openseekthermalsrc_class_init( GstOpenSeekThermalSrcClass *klass
 
   g_object_class_install_property(
       gobject_class, PROP_SERIAL,
-      g_param_spec_string(
-          "serial", "Serial Number",
-          "Serial of the SeekThermal serial to use. Only SeekThermal Nanos seem to have one.", "",
-          (GParamFlags)( G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS ) ) );
+      g_param_spec_string( "serial", "Serial Number", "Serial of the SeekThermal camera to use.",
+                           "", (GParamFlags)( G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS ) ) );
   g_object_class_install_property(
       gobject_class, PROP_PORT,
       g_param_spec_string(

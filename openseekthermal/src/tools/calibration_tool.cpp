@@ -630,8 +630,7 @@ int main( int argc, char **argv )
   const int height = camera->getFrameHeight();
 
   // Suggested calibration filename embeds the unit serial so per-unit files
-  // don't collide. The Nano advertises its serial over USB; the Compact Pro's
-  // is read from factory data during open().
+  // don't collide.
   const std::string cam_serial = camera->getSerialNumber();
   const std::string default_calibration_name =
       cam_serial.empty() ? std::string( "calibration.ini" ) : "calibration_" + cam_serial + ".ini";

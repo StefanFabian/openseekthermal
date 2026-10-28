@@ -44,7 +44,7 @@ from the SeekThermal camera.
 
 | Property                | Type    | Description                                                                                              |
 |-------------------------|---------|----------------------------------------------------------------------------------------------------------|
-| `serial`                | string  | Identifies the device if available (Nano only). Takes precedence over `port`.                            |
+| `serial`                | string  | Identifies the device if available. Takes precedence over `port`.                                        |
 | `port`                  | string  | USB port of the device, e.g. `1-3.2`. Use `list_seek_devices` to discover. Ignored if `serial` is set.   |
 | `skip-invalid-frames`   | bool    | If true, only emit thermal frames; skip the calibration frames captured while the shutter is closed.     |
 | `normalize`             | bool    | Stretch frame values to the full 16-bit range for visual contrast.                                       |
@@ -111,7 +111,7 @@ std::vector<openseekthermal::SeekDevice> connected_devices = openseekthermal::li
 ```
 
 A `SeekDevice` encodes the type of camera and the identifier.
-The identifier is the serial if available (only for Nano) or alternatively
+The identifier is the serial if available or alternatively
 the USB bus + port (e.g. `1-1` for bus 1 port 1, or `1-3.2` for bus 1, hub
 on port 3, port 2 on the hub). The serial always has precedence over the
 bus + port.

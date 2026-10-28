@@ -3,6 +3,7 @@
 
 #include "openseekthermal/detail/cameras/seek_thermal_camera.hpp"
 #include "openseekthermal/detail/exceptions.hpp"
+#include "openseekthermal/openseekthermal.hpp"
 #include <libusb-1.0/libusb.h>
 
 #include <algorithm>
@@ -11,7 +12,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "../helpers.hpp"
 #include "../logging.hpp"
 #include "../timer.hpp"
 
@@ -21,9 +21,6 @@ namespace openseekthermal
 SeekThermalCamera::SeekThermalCamera( SeekDevice device, libusb_context *usb_context ) noexcept
     : device_( std::move( device ) ), usb_context_( usb_context )
 {
-  // Default to the USB-advertised serial (Nano 300). Products that don't expose
-  // it over USB overwrite this from factory data in setupCamera().
-  serial_number_ = device_.serial;
 }
 
 SeekThermalCamera::~SeekThermalCamera()
@@ -83,20 +80,15 @@ void SeekThermalCamera::openDevice()
   if ( device_count < 0 ) {
     throw USBError( "Failed to get device list!", static_cast<int>( device_count ) );
   }
-  libusb_device_descriptor desc = {};
   for ( ssize_t i = 0; i < device_count; ++i ) {
     libusb_device *device = devices[i];
-    returncode = libusb_get_device_descriptor( device, &desc );
-    if ( returncode != 0 ) {
-      continue;
-    }
-    if ( desc.idVendor != device_._getVendorID() || desc.idProduct != device_._getProductID() ) {
-      continue;
-    }
-
-    std::string port = bus_and_port_numbers_to_string( device );
-    if ( device_.serial.empty() && device_.usb_port != port ) {
-      // Port is only used if serial is not available
+    // Resolve like listDevices() since the serial may come from factory data instead of USB.
+    // getSeekDevice() only opens devices with a supported vendor and product id.
+    // Port is only used if serial is not available.
+    SeekDevice candidate = getSeekDevice( device );
+    if ( candidate.type != device_.type ||
+         ( device_.serial.empty() ? candidate.usb_port != device_.usb_port
+                                  : candidate.serial != device_.serial ) ) {
       continue;
     }
 
@@ -110,13 +102,8 @@ void SeekThermalCamera::openDevice()
       usb_device_handle_ = nullptr;
       continue;
     }
-    std::string serial = get_usb_descriptor_ascii_string( usb_device_handle_, desc.iSerialNumber );
-    if ( !device_.serial.empty() && serial != device_.serial ) {
-      libusb_close( usb_device_handle_ );
-      usb_device_handle_ = nullptr;
-      continue;
-    }
     // Either device has serial and serial matched, or no serial and port matched, we found it!
+    device_.serial = candidate.serial;
     break;
   }
   if ( usb_device_handle_ == nullptr ) {
