@@ -34,7 +34,7 @@ jobs:
 
       - name: Lint package.xml
         run: |
-          xmllint --noout --schema http://download.ros.org/schema/package_format3.xsd $(find . -name 'package.xml')
+          xmllint --noout --schema <(curl -sf http://download.ros.org/schema/package_format3.xsd) $(find . -name 'package.xml')
 
   build-and-ros:
     needs: Linting
